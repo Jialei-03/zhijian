@@ -4,23 +4,36 @@ The old SQL definition columns are migration archives only. Valid snapshots and
 library sync baselines live beside the data directory, never in model prompts.
 """
 
+import base64
+import binascii
 import hashlib
 import io
 import os
-from pathlib import Path
 import re
 import tempfile
 import tomllib
+from pathlib import Path, PureWindowsPath
+from xml.etree import ElementTree
 
+from PIL import Image
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.error import MarkedYAMLError
 from sqlalchemy import select
 from sqlalchemy.orm import object_session
 
+from .builtin_agent_versions import BUILTIN_HASHES
+
 GROUPS = ("literature", "files", "shell", "experiments", "web", "project")
 COLORS = ("blue", "green", "amber", "red", "violet", "slate")
 BUILTINS = Path(__file__).parent / "agents"
+AVATAR_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+}
 
 
 class DefinitionError(ValueError):
@@ -77,11 +90,15 @@ def parse(source, role="custom"):
         or name.endswith((".", " "))
     ):
         fail("name", "名字无效 / Invalid name")
-    for key in ("description", "model", "color"):
+    for key in ("description", "model", "color", "avatar"):
         if key in header and not isinstance(header[key], str):
             fail(key, f"{key} 必须是文字 / Must be text")
     if header.get("color", "blue") not in COLORS:
         fail("color", "头像颜色无效 / Invalid avatar color")
+    try:
+        avatar_relative(header.get("avatar", ""))
+    except ValueError as exc:
+        fail("avatar", str(exc))
     for key in ("tools", "machines", "channels"):
         if key in header and (
             not isinstance(header[key], list)
@@ -125,6 +142,7 @@ def parse(source, role="custom"):
         "name": name,
         "description": header.get("description", ""),
         "avatar_color": header.get("color", "blue"),
+        "avatar": header.get("avatar", ""),
         "role_description": body.removeprefix("\n"),
         "model_config_id": header.get("model", ""),
         "permissions": permissions,
@@ -160,6 +178,11 @@ def render(config, source="", role="custom"):
         "channels": config.get("channels", []),
         "enabled": config.get("enabled", True),
     }
+    if config.get("avatar") is not None:
+        if config["avatar"]:
+            values["avatar"] = config["avatar"]
+        else:
+            header.pop("avatar", None)
     p = config.get("permissions", {})
     tools = config.get("tools")
     if tools is None:
@@ -304,6 +327,57 @@ def safe_path(root, relative):
     return path
 
 
+def avatar_relative(value):
+    """Unknown avatar formats round-trip; recognized images must be repo-relative."""
+    if (
+        not value
+        or value.startswith("pixel:")
+        or Path(value).suffix.lower() not in AVATAR_TYPES
+    ):
+        return None
+    if (
+        "\\" in value
+        or ":" in value
+        or "\0" in value
+        or Path(value).is_absolute()
+        or PureWindowsPath(value).drive
+        or ".." in Path(value).parts
+    ):
+        raise ValueError("头像路径无效 / Invalid avatar path")
+    return value
+
+
+def avatar_path(root, value):
+    relative = avatar_relative(value)
+    return safe_path(root, relative) if relative else None
+
+
+def avatar_upload(upload):
+    """Decode and verify uploads before changing a member or its image."""
+    try:
+        raw = base64.b64decode(upload.content, validate=True)
+        if upload.extension == "svg":
+            if b"<!DOCTYPE" in raw.upper() or b"<!ENTITY" in raw.upper():
+                raise ValueError()
+            if ElementTree.fromstring(raw).tag != "{http://www.w3.org/2000/svg}svg":
+                raise ValueError()
+        else:
+            with Image.open(io.BytesIO(raw)) as image:
+                expected = {"png": "PNG", "jpg": "JPEG", "jpeg": "JPEG", "webp": "WEBP"}
+                if image.format != expected[upload.extension]:
+                    raise ValueError()
+                image.verify()
+        return raw
+    except (
+        ValueError,
+        binascii.Error,
+        OSError,
+        ElementTree.ParseError,
+        Image.DecompressionBombError,
+    ) as exc:
+        raise ValueError("头像图片无效 / Invalid avatar image") from exc
+
+
 def atomic_write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp = tempfile.mkstemp(prefix=".agent-", dir=path.parent)
@@ -349,6 +423,7 @@ def legacy_config(member):
     return {
         **MemberConfig(name=member.legacy_name or role).model_dump(),
         "avatar_color": member.legacy_avatar_color or "blue",
+        "avatar": "",
         "role_description": text,
         "model_config_id": member.legacy_model_config_id or "",
         "permissions": member.legacy_permissions
@@ -401,7 +476,14 @@ def ensure_member(member):
     values["max_tokens"] = legacy_limit(member.legacy_max_tokens, 2000000)
     values["channels"] = channels_for(d, member, member.legacy_subscriptions or [])
     source = render(values, role=member.role)
-    save_member(member, source, actor="ORA migration", initialize=True)
+    builtin = builtin_file(member)
+    if builtin:
+        original = builtin.read_bytes().decode("utf-8")
+        if parse(source, member.role) == parse(original, member.role):
+            source = original
+    save_member(
+        member, source, actor="ORA migration", initialize=True, builtin=bool(builtin)
+    )
     if member.library_id:
         from .models import MemberLibrary
 
@@ -440,6 +522,45 @@ def read_valid(settings, row, path, role="custom"):
         raise DefinitionError(1, str(exc)) from None
 
 
+def builtin_file(member):
+    if not member.library_id and member.role in BUILTIN_HASHES:
+        return BUILTINS / f"{member.role}.md"
+    return None
+
+
+def builtin_record(member):
+    return f".ora/builtin-agents/{member.role}.sha256"
+
+
+def update_builtin(member, root, path):
+    """Only an exact bundled copy may follow an updated built-in automatically."""
+    member._builtin_update_available = False
+    builtin = builtin_file(member)
+    if not builtin:
+        return
+    current = builtin.read_bytes()
+    current_hash = hashlib.sha256(current).hexdigest()
+    raw_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+    record = safe_path(root, builtin_record(member))
+    baseline = record.read_text(encoding="utf-8").strip() if record.exists() else None
+    member._builtin_update_available = (baseline or raw_hash) != current_hash
+    if raw_hash == current_hash:
+        member._builtin_update_available = False
+        return
+    unchanged = (
+        raw_hash == baseline if baseline else raw_hash in BUILTIN_HASHES[member.role]
+    )
+    if unchanged:
+        saved = save_member(
+            member,
+            current.decode("utf-8"),
+            actor="ORA",
+            builtin=True,
+            expected_hash=raw_hash,
+        )
+        member._builtin_update_available = saved is None
+
+
 def read_member(member):
     ensure_member(member)
     settings = settings_of(member)
@@ -448,7 +569,14 @@ def read_member(member):
     root = member_root(settings, member)
     try:
         path = safe_path(root, member.file_path)
-        return read_valid(settings, member, path, member.role)
+        try:
+            update_builtin(member, root, path)
+        except OSError:
+            # Missing definitions still use the valid snapshot and expose its error.
+            pass
+        return read_valid(
+            settings, member, safe_path(root, member.file_path), member.role
+        )
     except ValueError as exc:
         member._file_error = str(exc)
         snapshot = state_path(settings, member.id)
@@ -511,7 +639,15 @@ def model_identifier(settings, owner, model):
     return match["id"] if match else model
 
 
-def save_member(member, source, actor, initialize=False):
+def save_member(
+    member,
+    source,
+    actor,
+    initialize=False,
+    upload=None,
+    builtin=False,
+    expected_hash=None,
+):
     from . import research_repo
 
     values = parse(source, member.role)
@@ -522,6 +658,11 @@ def save_member(member, source, actor, initialize=False):
     if person:
         actor = f"{person.username} ({actor})"
     repo = member_root(settings, member)
+    image = avatar_upload(upload) if upload else None
+    if upload:
+        values["avatar"] = f".ora/avatars/{values['name']}.{upload.extension}"
+        source = render(values, source, member.role)
+    image_path = avatar_path(repo, values["avatar"])
     relative = f".ora/agents/{values['name']}.md"
     if initialize:
         from .models import TeamMember
@@ -543,12 +684,34 @@ def save_member(member, source, actor, initialize=False):
     with research_repo._locked(research_repo.home(settings, member.workspace_id)):
         path = safe_path(repo, relative)
         old = safe_path(repo, member.file_path) if member.file_path else None
+        if expected_hash is not None and (
+            old is None or hashlib.sha256(old.read_bytes()).hexdigest() != expected_hash
+        ):
+            return None
         if (old is None or path != old) and path.exists():
             # An interrupted SQL transaction may have already exported this exact file.
             if not initialize or path.read_text(encoding="utf-8") != source:
                 raise ValueError("同名成员文件已存在 / Agent file already exists")
         atomic_write(path, source)
         paths = [relative]
+        if builtin:
+            record = builtin_record(member)
+            atomic_write(
+                safe_path(repo, record),
+                hashlib.sha256(builtin_file(member).read_bytes()).hexdigest() + "\n",
+            )
+            paths.append(record)
+        if image is not None:
+            # Commit the image and definition together, only when the member is saved.
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, temporary = tempfile.mkstemp(prefix=".avatar-", dir=image_path.parent)
+            try:
+                with os.fdopen(fd, "wb") as output:
+                    output.write(image)
+                os.replace(temporary, image_path)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
+            paths.append(values["avatar"])
         if old and old != path and old.exists():
             old.unlink()
             old_relative = str(old.relative_to(repo))
@@ -568,7 +731,9 @@ def save_member(member, source, actor, initialize=False):
                 "commit",
                 "-q",
                 "-m",
-                f"{actor} 修改成员 {values['name']}",
+                f"更新内置成员 {values['name']}"
+                if expected_hash is not None
+                else f"{actor} 修改成员 {values['name']}",
                 "--",
                 *paths,
             )

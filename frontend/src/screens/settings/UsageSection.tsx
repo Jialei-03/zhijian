@@ -50,40 +50,42 @@ export function UsageSection() {
           aria-label={t("common.loading")}
         />
       ) : (
-        <>
-          <dl className={styles.figures}>
-            <div className={styles.figure}>
-              <dt>{t("settings.usage.requests")}</dt>
-              <dd>{count(usage.requests)}</dd>
-            </div>
-            <div className={styles.figure}>
-              <dt>{t("settings.usage.tokens")}</dt>
-              <dd>{count(usage.total_tokens)}</dd>
-            </div>
-            {usage.budgets
-              ?.filter((budget) => budget.limit_tokens > 0)
-              .map((budget) => (
-                <div key={budget.scope} className={styles.figure}>
-                  <dt>
-                    {t(
-                      budget.scope === "shared"
-                        ? "settings.usage.budgetShared"
-                        : "settings.usage.budgetPrivate",
-                    )}
-                  </dt>
-                  <dd>
-                    {count(budget.charged_tokens)} /{" "}
-                    {count(budget.limit_tokens)}
-                  </dd>
-                </div>
-              ))}
-          </dl>
-          {usage.unknown_requests > 0 && (
-            <p className={styles.muted}>
-              {tn("settings.usage.unknown", usage.unknown_requests)}
-            </p>
-          )}
-        </>
+        <div className={styles.card}>
+          <div className={styles.settingDetails}>
+            <dl className={styles.figures}>
+              <div className={styles.figure}>
+                <dt>{t("settings.usage.requests")}</dt>
+                <dd>{count(usage.requests)}</dd>
+              </div>
+              <div className={styles.figure}>
+                <dt>{t("settings.usage.tokens")}</dt>
+                <dd>{count(usage.total_tokens)}</dd>
+              </div>
+              {usage.budgets
+                ?.filter((budget) => budget.limit_tokens > 0)
+                .map((budget) => (
+                  <div key={budget.scope} className={styles.figure}>
+                    <dt>
+                      {t(
+                        budget.scope === "shared"
+                          ? "settings.usage.budgetShared"
+                          : "settings.usage.budgetPrivate",
+                      )}
+                    </dt>
+                    <dd>
+                      {count(budget.charged_tokens)} /{" "}
+                      {count(budget.limit_tokens)}
+                    </dd>
+                  </div>
+                ))}
+            </dl>
+            {usage.unknown_requests > 0 && (
+              <p className={styles.muted}>
+                {tn("settings.usage.unknown", usage.unknown_requests)}
+              </p>
+            )}
+          </div>
+        </div>
       )}
     </Section>
   );

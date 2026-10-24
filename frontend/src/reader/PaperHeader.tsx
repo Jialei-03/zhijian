@@ -9,6 +9,9 @@ import {
   Search,
   Star,
   Undo2,
+  ScanLine,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import {
@@ -377,18 +380,21 @@ export function PaperHeader({
   const fit: MenuEntry = {
     id: "zoom-fit",
     label: t("reader.zoom.fit"),
+    icon: ScanLine,
     shortcut: "mod+0",
     onSelect: () => controller?.setZoom("fit"),
   };
   const zoomIn: MenuEntry = {
     id: "zoom-in",
     label: t("reader.zoom.in"),
+    icon: ZoomIn,
     shortcut: "mod+=",
     onSelect: () => controller?.zoomIn(),
   };
   const zoomOut: MenuEntry = {
     id: "zoom-out",
     label: t("reader.zoom.out"),
+    icon: ZoomOut,
     shortcut: "mod+-",
     onSelect: () => controller?.zoomOut(),
   };
@@ -505,7 +511,6 @@ export function PaperHeader({
                   <Tooltip content={t("reader.zoom.menu")}>
                     <Button
                       {...props}
-                      size="sm"
                       variant="ghost"
                       className={styles.zoom}
                       aria-label={t("reader.zoom.current", { percent })}

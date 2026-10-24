@@ -1,6 +1,16 @@
+import { MemberAvatar } from "../team/MemberEditor";
+import { TeamMemberCard, colleagueStatus } from "./TeamMemberCard";
+import { followLink } from "../../reader/route";
 import { memberName } from "../team/member-model";
-import { AtSign, Hash, MessageSquare, Plus, Settings } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import {
+  Bell,
+  ClipboardList,
+  Hash,
+  MessageSquare,
+  Plus,
+  Settings,
+} from "lucide-react";
+import { useCallback, useContext, useEffect, useState } from "react";
 import { parseAppRoute } from "../../app/routes";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { MessageKey } from "../../i18n/i18n";
@@ -21,10 +31,20 @@ import {
   type Team,
   type TeamMember,
 } from "./team-api";
-import { useResearchNavigation } from "./ResearchNavigation";
+import { ResearchAttention, useResearchNavigation } from "./ResearchNavigation";
+import { AppActions } from "../../app/AppSidebar";
+import { sidebarId } from "../../app/sidebar-entries";
+import {
+  MESSAGE_FIRST,
+  pageRows,
+  sidebarPageKey,
+  SidebarPagination,
+  useSidebarPage,
+} from "../../app/sidebar-pagination";
 import { WorkspacePicker } from "./WorkspaceDialogs";
 import styles from "./Team.module.css";
-import { defaultChannelNames } from "./team-model";
+import { defaultChannelNames, threadDate } from "./team-model";
+import nav from "./TeamNavigation.module.css";
 
 export function useTeam(id: string) {
   const [team, setTeam] = useState<Team | null>(null);
@@ -96,6 +116,7 @@ export function TeamSwitcher({
     <div className={styles.switcher}>
       <WorkspacePicker
         value={id}
+        data-id={sidebarId("workspace")}
         label={t("team.switch")}
         onChange={(next) => go(teamHash(next))}
       />
@@ -103,14 +124,21 @@ export function TeamSwitcher({
   );
 }
 
-export function MemberStatus({ status }: { status: TeamMember["status"] }) {
+export function MemberStatus({
+  status,
+  enabled,
+  paused,
+}: Pick<TeamMember, "status" | "enabled" | "paused">) {
   const { t } = useI18n();
+  const state = enabled === false ? "disabled" : paused ? "paused" : status;
   return (
     <span
       className={styles.status}
-      data-status={status}
+      data-status={state}
       role="img"
-      aria-label={t(`team.status.${status}`)}
+      aria-label={t(
+        state === "disabled" ? "members.disabled" : `team.status.${state}`,
+      )}
     />
   );
 }
@@ -125,99 +153,23 @@ export function TeamNavigation({
   const { t } = useI18n();
   const id = useTeamWorkspace(hash);
   const { team, error, reload } = useTeam(id);
-  const route = parseAppRoute(hash);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [failure, setFailure] = useState("");
   const [saving, setSaving] = useState(false);
-  if (!id)
-    return (
-      <SidebarItem
-        icon={Plus}
-        label={t("team.create")}
-        href="#workspaces"
-        onClick={() => go("workspaces")}
-      />
-    );
   return (
     <>
-      <SidebarSection>
-        <SidebarItem
-          icon={MessageSquare}
-          label={t("team.threads")}
-          href={`#${teamHash(id, "threads")}`}
-          active={route.screen === "team" && route.channelId === "threads"}
-          onClick={() => go(teamHash(id, "threads"))}
-        />
-        <SidebarItem
-          icon={AtSign}
-          label={t("team.mentions")}
-          dot={!!team?.notifications.length}
-          href={`#${teamHash(id, "mentions")}`}
-          active={route.screen === "team" && route.channelId === "mentions"}
-          onClick={() => go(teamHash(id, "mentions"))}
-        />
-      </SidebarSection>
-      <SidebarSection title={t("team.channels")}>
-        {team?.channels
-          .filter((c) => !c.member_id)
-          .map((c) => (
-            <SidebarItem
-              key={c.id}
-              icon={Hash}
-              label={
-                defaultChannelNames[c.key] === c.name
-                  ? t(`team.channel.${c.key}` as MessageKey)
-                  : c.name
-              }
-              dot={!!c.unread}
-              href={`#${teamHash(id, c.id)}`}
-              active={route.screen === "team" && route.channelId === c.id}
-              onClick={() => go(teamHash(id, c.id))}
-            />
-          ))}
-        <IconButton
-          icon={Plus}
-          label={t("team.addChannel")}
-          onClick={() => {
-            setCreating(true);
-            setName("");
-          }}
-        />
-      </SidebarSection>
-      <SidebarSection title={t("team.direct")}>
-        {team?.channels
-          .filter(
-            (c) =>
-              c.member_id &&
-              !team.members.find((m) => m.id === c.member_id)?.deleted,
-          )
-          .map((c) => {
-            const member = team.members.find((m) => m.id === c.member_id)!;
-            return (
-              <div key={c.id} className={styles.memberRow}>
-                <MemberStatus status={member.status} />
-                <SidebarItem
-                  icon={MessageSquare}
-                  label={memberName(member, t)}
-                  dot={!!c.unread}
-                  active={route.screen === "team" && route.channelId === c.id}
-                  href={`#${teamHash(id, c.id)}`}
-                  onClick={() => go(teamHash(id, c.id))}
-                />
-              </div>
-            );
-          })}
-      </SidebarSection>
-      <SidebarSection>
-        <SidebarItem
-          icon={Settings}
-          label={t("team.settings")}
-          href={`#${teamHash(id, "settings")}`}
-          active={route.screen === "team" && route.channelId === "settings"}
-          onClick={() => go(teamHash(id, "settings"))}
-        />
-      </SidebarSection>
+      <TeamConversationList
+        team={team}
+        id={id}
+        hash={hash}
+        go={go}
+        onCreate={() => {
+          setCreating(true);
+          setName("");
+          setFailure("");
+        }}
+      />
       {error && (
         <Button variant="ghost" onClick={reload}>
           {t("common.retry")}
@@ -262,5 +214,250 @@ export function TeamNavigation({
         {failure && <p role="alert">{failure}</p>}
       </Dialog>
     </>
+  );
+}
+
+function UnreadBadge({ count }: { count: number }) {
+  const { t } = useI18n();
+  return count > 0 ? (
+    <span className={nav.badge} aria-label={t("team.unreadCount", { count })}>
+      {count}
+    </span>
+  ) : null;
+}
+
+export function TeamConversationList({
+  team,
+  id,
+  hash,
+  go,
+  onCreate,
+}: {
+  team: Team | null;
+  id: string;
+  hash: string;
+  go(hash: string): void;
+  onCreate(): void;
+}) {
+  const { t, tn, locale } = useI18n();
+  const { owner = "" } = useContext(AppActions);
+  const [limit, choose] = useSidebarPage(
+    sidebarPageKey(owner, id, "messages"),
+    MESSAGE_FIRST,
+  );
+  const route = parseAppRoute(hash);
+  const members = new Map(team?.members.map((member) => [member.id, member]));
+  const channels = (team?.channels || [])
+    .filter(
+      (channel) =>
+        !channel.member_id ||
+        (members.has(channel.member_id) &&
+          !members.get(channel.member_id)!.deleted),
+    )
+    .sort(
+      (a, b) =>
+        (Date.parse(b.last_at ?? "") || 0) -
+          (Date.parse(a.last_at ?? "") || 0) || a.id.localeCompare(b.id),
+    );
+  const selectedChannel =
+    route.screen === "team"
+      ? team?.channels.find(
+          (channel) =>
+            channel.id === route.channelId ||
+            channel.key === (route.channelId || "experiments"),
+        )
+      : undefined;
+  const current = (channel: string) =>
+    route.screen === "team" &&
+    (route.channelId === channel || selectedChannel?.id === channel);
+  const { rows, hidden } = pageRows(
+    channels,
+    limit,
+    (channel) =>
+      current(channel.id) ||
+      !!channel.working_member_ids?.length ||
+      channel.unread > 0,
+  );
+  const avatar = (member: TeamMember) => (
+    <span className={nav.memberAvatar}>
+      <MemberAvatar member={member} />
+      <MemberStatus
+        status={member.status}
+        enabled={member.enabled}
+        paused={member.paused}
+      />
+    </span>
+  );
+  return (
+    <div className={nav.navigation}>
+      <SidebarSection>
+        {(
+          [
+            ["threads", MessageSquare, team?.threads_unread || 0],
+            [
+              "mentions",
+              Bell,
+              team?.activity_unread ?? team?.mentions_unread ?? 0,
+            ],
+          ] as const
+        ).map(([key, icon, count]) => (
+          <div key={key} className={nav.shortcut}>
+            <SidebarItem
+              data-id={sidebarId(key === "mentions" ? "activity" : "threads")}
+              icon={icon}
+              label={t(key === "mentions" ? "team.activity" : "team.threads")}
+              href={id ? `#${teamHash(id, key)}` : undefined}
+              disabled={!id}
+              active={current(key)}
+              onClick={followLink(go, teamHash(id, key))}
+            />
+            <UnreadBadge count={count} />
+          </div>
+        ))}
+      </SidebarSection>
+      <SidebarItem
+        data-id={sidebarId("work")}
+        icon={ClipboardList}
+        label={t("team.work.title")}
+        href={id ? `#${teamHash(id, "work")}` : undefined}
+        disabled={!id}
+        active={current("work")}
+        onClick={followLink(go, teamHash(id, "work"))}
+      />
+      <ResearchAttention go={go} />
+      <div className={nav.heading} data-sidebar-place="messages">
+        <span id="team-conversations">{t("team.messages")}</span>
+        <IconButton
+          data-id={sidebarId("create-channel")}
+          disabled={!id}
+          icon={Plus}
+          label={t("team.addChannel")}
+          onClick={onCreate}
+        />
+      </div>
+      <div
+        className={nav.conversations}
+        data-sidebar-place="messages"
+        data-id={sidebarId("messages")}
+        role="group"
+        aria-labelledby="team-conversations"
+      >
+        {rows.map((channel) => {
+          const member = channel.member_id
+            ? members.get(channel.member_id)
+            : undefined;
+          const name = member
+            ? memberName(member, t)
+            : defaultChannelNames[channel.key] === channel.name
+              ? t(`team.channel.${channel.key}` as MessageKey)
+              : channel.name;
+          // Empty messages (a run that said nothing) leave no preview.
+          const last = channel.last_message?.text?.trim()
+            ? channel.last_message
+            : undefined;
+          const author = last?.author_id
+            ? members.get(last.author_id)
+            : undefined;
+          const authorName = author ? memberName(author, t) : last?.author_name;
+          const activeMember =
+            member && ["working", "queued"].includes(member.status)
+              ? member
+              : channel.working_member_ids
+                  ?.map((id) => members.get(id))
+                  .find(
+                    (item) =>
+                      item && ["working", "queued"].includes(item.status),
+                  );
+          // A run can be active while the member reads "waiting" or "idle"; the preview still says it is working.
+          const working =
+            !!activeMember || !!channel.working_member_ids?.length;
+          const target = teamHash(id, channel.id);
+          return (
+            <div key={channel.id} className={nav.conversationRow}>
+              <a
+                className={nav.conversation}
+                data-id={sidebarId("conversation")}
+                href={`#${target}`}
+                aria-label={name}
+                aria-current={current(channel.id) ? "page" : undefined}
+                onClick={followLink(go, target)}
+              >
+                {member ? (
+                  <span className={nav.memberAvatar} aria-hidden />
+                ) : (
+                  <span className={nav.channelAvatar}>
+                    <Hash size={16} aria-hidden="true" />
+                  </span>
+                )}
+                <span className={nav.content}>
+                  <span className={nav.line}>
+                    <span className={nav.name}>{name}</span>
+                    {channel.last_at && (
+                      <time dateTime={channel.last_at}>
+                        {threadDate(
+                          channel.last_at,
+                          locale,
+                          new Date(),
+                          "conversation",
+                        )}
+                      </time>
+                    )}
+                  </span>
+                  <span className={nav.line}>
+                    <span
+                      className={nav.preview}
+                      data-working={working || undefined}
+                    >
+                      {member?.paused
+                        ? t("team.status.paused")
+                        : activeMember
+                          ? colleagueStatus(activeMember, { t, tn })
+                          : working
+                            ? t("team.workingPreview")
+                            : last
+                              ? authorName
+                                ? t("team.preview", {
+                                    author: authorName,
+                                    text: last.text,
+                                  })
+                                : last.text
+                              : ""}
+                    </span>
+                    <UnreadBadge count={channel.unread} />
+                  </span>
+                </span>
+              </a>
+              {member && team && (
+                <TeamMemberCard
+                  team={team}
+                  member={member}
+                  className={nav.profileTrigger}
+                >
+                  {avatar(member)}
+                </TeamMemberCard>
+              )}
+            </div>
+          );
+        })}
+        <SidebarPagination
+          list="messages"
+          first={MESSAGE_FIRST}
+          limit={limit}
+          hidden={hidden}
+          choose={choose}
+        />
+      </div>
+      <div className={nav.settings} data-sidebar-place="team">
+        <SidebarItem
+          data-id={sidebarId("team-settings")}
+          icon={Settings}
+          label={t("team.settings")}
+          href={id ? `#${teamHash(id, "settings")}` : undefined}
+          disabled={!id}
+          active={current("settings")}
+          onClick={followLink(go, teamHash(id, "settings"))}
+        />
+      </div>
+    </div>
   );
 }

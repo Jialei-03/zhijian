@@ -64,7 +64,6 @@ def definitions(locale="zh"):
                 "评审综述的准确性、覆盖面和引用。",
                 "Review accuracy, coverage and citations.",
             ),
-            max_retries=3,
         ),
     ]
     writing = [
@@ -97,7 +96,6 @@ def definitions(locale="zh"):
                 "Check claims, evidence and citations; give specific revisions on failure.",
             ),
             confirmation=True,
-            max_retries=3,
         ),
     ]
     data = {
@@ -242,7 +240,7 @@ def definitions(locale="zh"):
 
 
 def compile_linear(definition, *, roles=None):
-    from .team_rules import _workflow_key, validate_workflow
+    from .team_rules import _workflow_key, deduplicate_workflow, validate_workflow
 
     source = deepcopy(definition)
     base = validate_workflow(
@@ -319,7 +317,6 @@ def compile_linear(definition, *, roles=None):
                 "enabled": True,
                 "when": when,
                 "then": then,
-                "limit": {"per_thread": 10},
             }
         )
         routes[rid] = {"from": start, "to": end}
@@ -351,7 +348,7 @@ def compile_linear(definition, *, roles=None):
             then.update(
                 action="review",
                 on_fail=prepared[index - 1]["role"],
-                max_rounds=spec.get("max_retries", 2),
+                max_rounds=spec.get("max_retries", 0),
             )
         return then, f"step:{index}"
 
@@ -401,7 +398,6 @@ def compile_linear(definition, *, roles=None):
                         "评审实验结果。 / Review the experiment results.",
                     ),
                     "on_fail": spec["role"],
-                    "max_rounds": 3,
                 },
                 role=spec["role"],
                 kind="result",
@@ -610,4 +606,4 @@ def compile_linear(definition, *, roles=None):
             kind="text",
         )
     workflow = validate_workflow({**base, "rules": rules})
-    return workflow, {"linear": {_workflow_key(workflow): routes}}
+    return deduplicate_workflow(workflow, {"linear": {_workflow_key(workflow): routes}})

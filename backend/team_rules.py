@@ -23,6 +23,8 @@ EVENTS = Literal[
     "plan_approved",
     "conclusion_proposed",
     "review_failed",
+    "accepted",
+    "changes_requested",
     "schedule",
 ]
 KINDS = Literal["text", "result", "plan", "conclusion", "draft", "review"]
@@ -31,7 +33,7 @@ Text = Annotated[str, Field(min_length=1)]
 
 class Action(TypedDict, total=False):
     rule: str
-    action: Literal["wake", "review", "wait_for_owner", "post", "limit"]
+    action: Literal["wake", "review", "wait_for_owner", "post", "limit", "skip"]
     reason: str
     limit: int
     member: str
@@ -95,8 +97,6 @@ class Then(Strict):
         if self.action == "review":
             if not self.on_fail:
                 raise ValueError("review requires on_fail")
-            if self.max_rounds is None:
-                self.max_rounds = 3
         elif self.on_fail is not None or self.max_rounds is not None:
             raise ValueError("on_fail/max_rounds requires review")
         if self.action == "post":
@@ -108,7 +108,7 @@ class Then(Strict):
 
 
 class Limit(Strict):
-    per_thread: Annotated[StrictInt, Field(ge=1)] = 10
+    per_thread: Annotated[StrictInt, Field(ge=0)] = 0
 
 
 class Position(Strict):
@@ -128,6 +128,11 @@ class RuleInput(Strict):
     def subscribers_event(self):
         if self.then.subscribers and self.when.event != "message":
             raise ValueError("subscribers requires a message trigger")
+        if self.then.member == "$author" and self.when.event not in {
+            "accepted",
+            "changes_requested",
+        }:
+            raise ValueError("original author requires a decision trigger")
         return self
 
 
@@ -166,7 +171,11 @@ def _resolve(ref, members, *, role=None):
 def _references(rule, members=None, channels=None):
     if members is not None:
         spec = rule["then"]
-        if spec["action"] in {"wake", "review"} and not spec.get("subscribers"):
+        if (
+            spec["action"] in {"wake", "review"}
+            and not spec.get("subscribers")
+            and spec.get("member") != "$author"
+        ):
             _resolve(
                 spec.get("member") or spec["role"],
                 members,
@@ -207,6 +216,83 @@ def validate_workflow(workflow, *, members=None, channels=None) -> dict:
         if unknown:
             raise ValueError(f"layout.channels: unknown channels {sorted(unknown)}")
     return result
+
+
+def route_options(route):
+    """One visible rule can have several linear execution entry points."""
+    if not route:
+        return []
+    return [
+        {k: v for k, v in route.items() if k != "alternatives"},
+        *route.get("alternatives", []),
+    ]
+
+
+def deduplicate_workflow(workflow, state=None):
+    """Collapse equal when/then pairs, retaining edits and all cursor routes.
+
+    Enabled state, limits and canvas positions belong to the retained rule. A
+    non-default value takes precedence over an untouched generated duplicate;
+    different instructions/targets remain distinct rules.
+    """
+    flow, state = deepcopy(workflow), deepcopy(state or {})
+    normalized_rules = [validate_rule(rule) for rule in flow["rules"]]
+    groups = {}
+    for index, normalized in enumerate(normalized_rules):
+        signature = json.dumps([normalized["when"], normalized["then"]], sort_keys=True)
+        groups.setdefault(signature, []).append((index, normalized))
+    aliases, retained = {}, set()
+    for group in groups.values():
+        index, chosen = max(
+            group,
+            key=lambda item: (
+                not item[1]["enabled"],
+                bool(item[1]["limit"]["per_thread"]),
+                "position" in item[1],
+            ),
+        )
+        retained.add(index)
+        aliases.update(
+            {r["id"]: chosen["id"] for _, r in group if r["id"] != chosen["id"]}
+        )
+    flow["rules"] = [r for i, r in enumerate(normalized_rules) if i in retained]
+    if not aliases:
+        return flow, state
+    wk = _workflow_key(flow)
+    if flow.get("builtin") and wk not in state.get("linear", {}):
+        state.setdefault("linear", {}).update(initial_state(workflow).get("linear", {}))
+    routing = state.get("linear", {}).get(wk, {})
+    for old, new in aliases.items():
+        if old in routing:
+            options = route_options(routing.get(new))
+            options.extend(
+                r for r in route_options(routing.pop(old)) if r not in options
+            )
+            routing[new] = {**options[0]}
+            if len(options) > 1:
+                routing[new]["alternatives"] = options[1:]
+        for partition in state.get("threads", {}).values():
+            current = partition.get("workflows", {}).get(wk, {})
+            counts = current.get("counts", {})
+            if old in counts:
+                counts[new] = counts.get(new, 0) + counts.pop(old)
+            reviews = current.get("reviews", {})
+            if old in reviews:
+                previous = reviews.pop(old)
+                if new not in reviews or previous.get("pending"):
+                    reviews[new] = previous
+        timers = state.get("last_runs", {}).get(wk, {})
+        if old in timers:
+            previous = timers.pop(old)
+            timers[new] = max(timers.get(new, previous), previous, key=_stamp)
+        for fired in state.get("fired", []):
+            if (
+                fired.get("workflow") == flow["id"]
+                and fired.get("version", flow["version"]) == flow["version"]
+                and fired.get("rule") == old
+            ):
+                fired["rule"] = new
+    return flow, state
 
 
 def _stamp(value):
@@ -294,7 +380,7 @@ def _workflow_key(workflow):
 
 def _matches(rule, event, *, mention=False):
     when = rule["when"]
-    author = event.get("author") or {}
+    author = event.get("original_author") or event.get("author") or {}
     return when["event"] == ("mention" if mention else event["type"]) and all(
         when.get(key) is None or when[key] == value
         for key, value in (
@@ -318,7 +404,11 @@ def _action(rule, event, members):
         result["channel"] = channel
     if spec["action"] in {"wake", "review"}:
         result["member"] = _resolve(
-            spec.get("member") or spec["role"],
+            (
+                (event.get("original_author") or event.get("author") or {}).get("id")
+                if spec.get("member") == "$author"
+                else spec.get("member") or spec["role"]
+            ),
             members,
             role=not bool(spec.get("member")),
         )
@@ -355,7 +445,9 @@ def match(workflow, event, state, *, members) -> MatchResult:
     Only the human owner resets the relay and releases an explicit owner wait.
     Review failures correlate with an outstanding review by reviewer and scope.
     """
-    workflow = validate_workflow(workflow, members=members)
+    workflow, state = deduplicate_workflow(
+        validate_workflow(workflow, members=members), state
+    )
     if event.get("type") not in EVENTS.__args__:
         raise ValueError("match requires a contract event type")
     if not event.get("team") or not event.get("channel") or "thread" not in event:
@@ -395,19 +487,41 @@ def match(workflow, event, state, *, members) -> MatchResult:
     if scope["waiting"]:
         return MatchResult([], result)
     actions = []
+    cursor = current["cursor"]
+
+    def route_for(rule):
+        return next(
+            (r for r in route_options(routing.get(rule["id"])) if r["from"] == cursor),
+            None,
+        )
 
     def active(rule):
-        route = routing.get(rule["id"])
-        return rule["enabled"] and (not route or route["from"] == current["cursor"])
+        return rule["enabled"] and (
+            rule["id"] not in routing or route_for(rule) is not None
+        )
 
     def eligible(rule):
-        return (
-            active(rule)
-            and current["counts"].get(rule["id"], 0) < rule["limit"]["per_thread"]
+        return active(rule) and (
+            not rule["limit"]["per_thread"]
+            or current["counts"].get(rule["id"], 0) < rule["limit"]["per_thread"]
         )
 
     def emit(rule, action, *, advance=True):
         if action["action"] in {"wake", "review"}:
+            if any(m["id"] == action["member"] and m.get("paused") for m in members):
+                if rule:
+                    name = next(
+                        m["name"] for m in members if m["id"] == action["member"]
+                    )
+                    actions.append(
+                        {
+                            **action,
+                            "action": "skip",
+                            "reason": "paused",
+                            "text": f"{name} 暂停中 / {name} is paused",
+                        }
+                    )
+                return False
             if any(
                 m["id"] == action["member"] and not m.get("enabled", True)
                 for m in members
@@ -430,7 +544,9 @@ def match(workflow, event, state, *, members) -> MatchResult:
             rid = rule["id"]
             current["counts"][rid] = current["counts"].get(rid, 0) + 1
             if advance and rid in routing:
-                current["cursor"] = routing[rid]["to"]
+                route = route_for(rule)
+                if route:
+                    current["cursor"] = route["to"]
         return action["action"] not in {"wait_for_owner", "limit"}
 
     # Failures only affect the review actually requested, never an arbitrary rule.
@@ -450,18 +566,22 @@ def match(workflow, event, state, *, members) -> MatchResult:
             if (
                 rule
                 and rule["enabled"]
-                and current["counts"].get(rid, 0) < rule["limit"]["per_thread"]
+                and (
+                    not rule["limit"]["per_thread"]
+                    or current["counts"].get(rid, 0) < rule["limit"]["per_thread"]
+                )
             ):
                 review["pending"] = False
+                maximum = rule["then"].get("max_rounds", 0)
                 action = {
                     "rule": rid,
                     "action": "limit",
                     "reason": "review",
-                    "limit": rule["then"]["max_rounds"],
+                    "limit": maximum,
                     "channel": event["channel"],
                     "thread": event["thread"],
                 }
-                if review["returns"] < rule["then"]["max_rounds"]:
+                if not maximum or review["returns"] < maximum:
                     action.update(
                         action="wake",
                         member=review["on_fail"],
@@ -472,9 +592,15 @@ def match(workflow, event, state, *, members) -> MatchResult:
                 if emit(rule, action, advance=False):
                     review["returns"] += 1
                     if rid in routing:
-                        current["cursor"] = routing[rid].get(
-                            "on_fail", routing[rid]["from"]
+                        route = next(
+                            (
+                                r
+                                for r in route_options(routing[rid])
+                                if r["to"] == current["cursor"]
+                            ),
+                            routing[rid],
                         )
+                        current["cursor"] = route.get("on_fail", route["from"])
             return MatchResult(actions, result)
     elif event["type"] == "message" and event.get("kind") == "review":
         pending = [
@@ -548,6 +674,8 @@ def match(workflow, event, state, *, members) -> MatchResult:
                 ).get("pending"):
                     continue
                 if not emit(rule, action):
+                    if any(m["id"] == target and m.get("paused") for m in members):
+                        continue
                     break
                 delivered.add(target)
                 if action["action"] == "review":
@@ -555,7 +683,13 @@ def match(workflow, event, state, *, members) -> MatchResult:
                     current["reviews"][rule["id"]] = {
                         "reviewer": target,
                         "on_fail": _resolve(rule["then"]["on_fail"], members),
-                        "returns": previous.get("returns", 0),
+                        "returns": (
+                            previous.get("returns", 0)
+                            if previous.get("cursor", current["cursor"])
+                            == current["cursor"]
+                            else 0
+                        ),
+                        "cursor": current["cursor"],
                         "pending": True,
                     }
             else:
@@ -569,7 +703,10 @@ def match(workflow, event, state, *, members) -> MatchResult:
             current["counts"][rule["id"]] = before + 1
     for member in mentions:
         if member not in delivered | claimed and any(
-            m["id"] == member and m["kind"] == "agent" and m.get("enabled", True)
+            m["id"] == member
+            and m["kind"] == "agent"
+            and m.get("enabled", True)
+            and not m.get("paused")
             for m in members
         ):
             action = {
@@ -643,5 +780,20 @@ def initial_state(workflow) -> dict:
         if template:
             definition, roles = template
             definition["version"] = workflow.get("version", 1)
-            return convert_linear_workflow(definition, roles=roles)[1]
+            generated, state = convert_linear_workflow(definition, roles=roles)
+            ids = {r["id"] for r in workflow["rules"]}
+            # An older saved duplicate may retain the edited rule's former id.
+            # Transfer the generated rule's routes to that surviving identity.
+            missing = []
+            for rule in generated["rules"]:
+                if rule["id"] in ids:
+                    continue
+                for item in workflow["rules"]:
+                    when = {k: v for k, v in item["when"].items() if k != "channel"}
+                    if rule["when"] == when and rule["then"] == item["then"]:
+                        missing.append({**rule, "when": item["when"]})
+                        break
+            return deduplicate_workflow(
+                {**workflow, "rules": [*workflow["rules"], *missing]}, state
+            )[1]
     return {}

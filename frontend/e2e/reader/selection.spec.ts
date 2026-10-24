@@ -632,10 +632,10 @@ test("without a model, the translation says where to add one", async ({
   });
   await selectLine(page, line(page, 1, WORDS));
   await page.keyboard.press("t");
-  await expect(popover(page)).toContainText("先在设置里添加模型");
+  await expect(popover(page)).toContainText("未配置模型");
   await expect(
-    popover(page).getByRole("link", { name: "去设置" }),
-  ).toHaveAttribute("href", "#settings");
+    popover(page).getByRole("link", { name: "添加模型" }),
+  ).toHaveAttribute("href", "#customize/models");
   await expect(popover(page).getByRole("alert")).toHaveCount(0);
   expect(created).toEqual([]);
 });

@@ -49,7 +49,7 @@ def rule(id="r", trigger="message", action="wake", **extra):
     if action in {"wake", "review"}:
         then.update(role="executor", instruction="Do the work")
     if action == "review":
-        then.update(role="advisor", on_fail="executor", max_rounds=3)
+        then.update(role="advisor", on_fail="executor")
     if action == "post":
         then.update(channel="out", text="Report")
     return {
@@ -57,7 +57,6 @@ def rule(id="r", trigger="message", action="wake", **extra):
         "enabled": True,
         "when": {"event": trigger},
         "then": then,
-        "limit": {"per_thread": 10},
         **extra,
     }
 
@@ -235,10 +234,7 @@ def test_wait_has_priority_even_when_last_and_event_mentions_someone(members):
 
 
 def test_agent_handoffs_are_never_capped(members):
-    many = {"per_thread": 1000}
-    flow = workflow(
-        rule(limit=many), rule("job", trigger="job_finished", limit=many)
-    )
+    flow = workflow(rule(), rule("job", trigger="job_finished"))
     state = {}
     for index in range(40):
         item = (
@@ -250,7 +246,7 @@ def test_agent_handoffs_are_never_capped(members):
         assert brief(actions) == [("wake", "m-executor")]
 
 
-@pytest.mark.parametrize("maximum", [0, 1, 3])
+@pytest.mark.parametrize("maximum", [1, 3])
 def test_review_returns_at_most_n_times(maximum, members):
     spec = rule(action="review", limit={"per_thread": 30})
     spec["when"].update(from_role="executor", kind="result")
@@ -258,8 +254,6 @@ def test_review_returns_at_most_n_times(maximum, members):
     flow = workflow(spec)
     state = {}
     for attempt in range(maximum + 1):
-        # The owner can resume a long review series past the relay cap.
-        _, state = run(flow, event(members), state, members)
         actions, state = run(
             flow, event(members, "executor", kind="result"), state, members
         )
@@ -270,6 +264,28 @@ def test_review_returns_at_most_n_times(maximum, members):
         assert brief(actions) == expected
         assert all(a["rule"] == "r" for a in actions)
         assert run(flow, failed, state, members).actions == []
+
+
+@pytest.mark.parametrize("maximum", [None, 0])
+@pytest.mark.parametrize("limit", [None, {}, {"per_thread": 0}])
+def test_missing_or_zero_limits_allow_repeated_reviews(maximum, limit, members):
+    spec = rule(action="review")
+    spec["when"].update(from_role="executor", kind="result")
+    if maximum is not None:
+        spec["then"]["max_rounds"] = maximum
+    if limit is not None:
+        spec["limit"] = limit
+    flow = workflow(spec)
+    state = {}
+    for _ in range(40):
+        actions, state = run(
+            flow, event(members, "executor", kind="result"), state, members
+        )
+        assert brief(actions) == [("review", "m-advisor")]
+        actions, state = run(
+            flow, event(members, "advisor", type="review_failed"), state, members
+        )
+        assert brief(actions) == [("wake", "m-executor")]
 
 
 def test_review_failure_needs_pending_reviewer_and_scope(members):
@@ -389,7 +405,7 @@ def test_pure_deterministic_detached_and_json_serializable(members):
             {"then": {"action": "wait_for_owner", "member": "me"}},
             "member/role requires",
         ),
-        ({"limit": {"per_thread": 0}}, "limit.per_thread"),
+        ({"limit": {"per_thread": -1}}, "limit.per_thread"),
         ({"limit": {"per_thread": True}}, "limit.per_thread"),
         ({"enabled": "yes"}, "enabled"),
         ({"position": {"x": float("inf"), "y": 0}}, "position.x"),
@@ -403,7 +419,7 @@ def test_rule_validation_explains_field(change, error):
 
 def test_workflow_validation_and_references(members):
     channels = [{"id": "c", "name": "Research", "kind": "channel"}]
-    flow = workflow(rule())
+    flow = workflow(rule(limit={"per_thread": 0}))
     assert rules.validate_workflow(flow, members=members, channels=channels) == flow
     for bad, error in [
         (workflow(rule(), rule()), "unique"),
@@ -781,8 +797,146 @@ def test_builtin_data_is_detached_and_bilingual_with_same_rule_identity(members)
             r["id"] for r in en[key]["rules"]
         ]
         assert rules.initial_state(zh[key]) == rules.initial_state(en[key])
+        for flow in (zh[key], en[key]):
+            signatures = [
+                json.dumps([spec["when"], spec["then"]], sort_keys=True)
+                for spec in flow["rules"]
+            ]
+            assert len(signatures) == len(set(signatures))
+            for spec in flow["rules"]:
+                assert spec["limit"]["per_thread"] == 0
+                assert not spec["then"].get("max_rounds")
     zh["research"]["rules"].clear()
     assert rules.builtin_workflows()["research"]["rules"]
+
+
+@pytest.mark.parametrize("cursor", ["start", "confirm:0"])
+def test_compiled_approval_retains_both_entry_points(cursor, members):
+    flow = rules.builtin_workflows()["research"]
+    state = rules.initial_state(flow)
+    state["threads"] = {
+        '["t","c","root"]': {
+            "relay": 0,
+            "waiting": False,
+            "workflows": {
+                rules._workflow_key(flow): {
+                    "cursor": cursor,
+                    "counts": {},
+                    "reviews": {},
+                }
+            },
+        }
+    }
+    actions, state = run(
+        flow, event(members, type="plan_approved", kind="plan"), state, members
+    )
+    assert brief(actions) == [("wake", "m-executor")]
+    assert next(iter(scope(state)["workflows"].values()))["cursor"] == "step:1"
+
+
+@pytest.mark.parametrize(
+    "cursor", ["confirm:1", "done", "step:2", "confirm:0", "step:0", "step:1"]
+)
+def test_compiled_discussion_retains_every_entry_point(cursor, members):
+    flow = rules.builtin_workflows()["research"]
+    state = rules.initial_state(flow)
+    state["threads"] = {
+        '["t","c","root"]': {
+            "relay": 0,
+            "waiting": False,
+            "workflows": {
+                rules._workflow_key(flow): {
+                    "cursor": cursor,
+                    "counts": {},
+                    "reviews": {},
+                }
+            },
+        }
+    }
+    actions, state = run(flow, event(members), state, members)
+    assert brief(actions) == [("wake", "m-advisor")]
+    expected = "step:0" if cursor == "confirm:0" else cursor
+    assert next(iter(scope(state)["workflows"].values()))["cursor"] == expected
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        {"enabled": False},
+        {"limit": {"per_thread": 7}},
+        {"position": {"x": 10, "y": 20}},
+    ],
+)
+def test_deduplicate_keeps_user_edits_and_routing_state(edit):
+    original = rule("generated")
+    edited = {**deepcopy(original), "id": "edited", **edit}
+    flow = workflow(original, rule("other", action="post"), edited)
+    wk = rules._workflow_key(flow)
+    state = {
+        "linear": {
+            wk: {
+                "generated": {"from": "start", "to": "step:1"},
+                "edited": {"from": "confirm:0", "to": "step:1"},
+            }
+        },
+        "threads": {
+            "thread": {
+                "workflows": {
+                    wk: {
+                        "cursor": "step:1",
+                        "counts": {"generated": 2, "edited": 1},
+                        "reviews": {},
+                    }
+                }
+            }
+        },
+    }
+    before = deepcopy((flow, state))
+    clean, migrated = rules.deduplicate_workflow(flow, state)
+    assert [r["id"] for r in clean["rules"]] == ["other", "edited"]
+    assert clean["rules"][1] == rules.validate_rule(edited)
+    assert {
+        r["from"] for r in rules.route_options(migrated["linear"][wk]["edited"])
+    } == {"start", "confirm:0"}
+    assert migrated["threads"]["thread"]["workflows"][wk]["counts"] == {"edited": 3}
+    assert rules.deduplicate_workflow(clean, migrated) == (clean, migrated)
+    assert (flow, state) == before
+
+
+def test_deduplicate_keeps_distinct_user_instructions():
+    original = rule("generated")
+    edited = {**deepcopy(original), "id": "edited"}
+    edited["then"]["instruction"] = "My revised experiment"
+    clean, _ = rules.deduplicate_workflow(workflow(original, edited))
+    assert [r["id"] for r in clean["rules"]] == ["generated", "edited"]
+    assert clean["rules"][1]["then"]["instruction"] == "My revised experiment"
+
+
+def test_deduplicate_same_id_keeps_the_edited_copy():
+    original = rule()
+    edited = {**deepcopy(original), "enabled": False}
+    clean, state = rules.deduplicate_workflow(workflow(original, edited))
+    assert clean["rules"] == [rules.validate_rule(edited)]
+    assert state == {}
+
+
+def test_edited_builtin_duplicate_keeps_routing_when_state_is_reseeded(members):
+    flow = rules.builtin_workflows()["research"]
+    for spec in flow["rules"]:
+        spec["when"]["channel"] = "c"
+    original = next(r for r in flow["rules"] if r["id"] == "research:approved-start")
+    flow["rules"].append(
+        {**deepcopy(original), "id": "research:0:approved", "limit": {"per_thread": 7}}
+    )
+    clean, _ = rules.deduplicate_workflow(flow)
+    # Exercise a later read whose routing state must be initialized afresh.
+    _, state = run(clean, event(members), {}, members)
+    actions, state = run(clean, event(members, type="plan_approved"), state, members)
+    assert actions == []  # The planning step has not submitted its plan yet.
+    _, state = run(clean, event(members, "advisor", kind="plan"), state, members)
+    actions, _ = run(clean, event(members, type="plan_approved"), state, members)
+    assert brief(actions) == [("wake", "m-executor")]
+    assert actions[0]["rule"] == "research:0:approved"
 
 
 def test_builtin_accepts_additional_rules_without_linear_cursor_conditions(members):
@@ -822,7 +976,7 @@ def test_migrate_existing_linear_definitions_preserves_instructions_outputs_and_
                 assert all(path in instructions for path in step.get("outputs", []))
         if key == "literature-review":
             review = next(r for r in flow["rules"] if r["then"]["action"] == "review")
-            assert review["then"]["max_rounds"] == 2
+            assert review["then"]["max_rounds"] == 0
 
 
 def test_custom_linear_cursor_and_retry_return_to_previous_step(members):
@@ -858,6 +1012,74 @@ def test_custom_linear_cursor_and_retry_return_to_previous_step(members):
         flow, event(members, "advisor", type="review_failed"), state, members
     )
     assert brief(actions) == [("limit", None)]
+
+
+def test_coalesced_reviews_keep_each_steps_retry_boundary(members):
+    source = {
+        "id": "repeat",
+        "name": "Repeat",
+        "steps": [
+            {"name": "Work", "type": "agent"},
+            {"name": "Check", "type": "review", "max_retries": 1},
+        ]
+        * 2,
+    }
+    flow, state = rules.convert_linear_workflow(source)
+    assert len([r for r in flow["rules"] if r["then"]["action"] == "review"]) == 1
+    actions, state = run(flow, event(members), state, members)
+    assert brief(actions) == [("wake", "m-executor")]
+    for final_cursor in ["step:2", "done"]:
+        actions, state = run(
+            flow, event(members, "executor", kind="result"), state, members
+        )
+        assert brief(actions) == [("review", "m-advisor")]
+        actions, state = run(
+            flow, event(members, "advisor", type="review_failed"), state, members
+        )
+        assert brief(actions) == [("wake", "m-executor")]
+        actions, state = run(
+            flow, event(members, "executor", kind="result"), state, members
+        )
+        assert brief(actions) == [("review", "m-advisor")]
+        _, state = run(flow, event(members, "advisor", kind="review"), state, members)
+        assert next(iter(scope(state)["workflows"].values()))["cursor"] == final_cursor
+
+
+@pytest.mark.parametrize("index", [1, 3])
+def test_resume_coalesced_review_uses_the_current_step(index, members):
+    from types import SimpleNamespace
+
+    from backend.team_workflows import prime
+
+    source = {
+        "id": "repeat",
+        "name": "Repeat",
+        "steps": [
+            {"name": "Work", "type": "agent"},
+            {"name": "Check", "type": "review", "max_retries": 1},
+        ]
+        * 2,
+    }
+    flow, state = rules.convert_linear_workflow(source)
+    project = SimpleNamespace(
+        id="root",
+        workspace_id=None,
+        workflow=flow,
+        status="active",
+        workflow_state={"execution": source, "current": index, "steps": [{}] * 4},
+    )
+    state = prime(project, state, "c", "t", members)
+    review = next(
+        iter(next(iter(scope(state)["workflows"].values()))["reviews"].values())
+    )
+    assert review["pending"] and review["cursor"] == f"step:{index}"
+    actions, state = run(
+        flow, event(members, "advisor", type="review_failed"), state, members
+    )
+    assert brief(actions) == [("wake", "m-executor")]
+    assert (
+        next(iter(scope(state)["workflows"].values()))["cursor"] == f"step:{index - 1}"
+    )
 
 
 @pytest.mark.parametrize(

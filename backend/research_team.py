@@ -2,6 +2,7 @@
 
 import json
 import re
+from html import unescape
 from uuid import NAMESPACE_URL, uuid5
 
 from sqlalchemy import or_, select, update
@@ -19,6 +20,7 @@ from .models import (
     TeamDelivery,
     TeamMember,
     TeamMessage,
+    TeamMessageMark,
     now,
 )
 
@@ -42,6 +44,52 @@ ACTIVE = {"queued", "running"}
 
 def normalize(text):
     return str(text or "").replace("\\n", "\n")
+
+
+def preview_text(text):
+    """A single plain-text line for the conversation list."""
+    return plain_text(text)[:80]
+
+
+def plain_text(text):
+    # ponytail: preview-only cleanup; use a Markdown parser for complex nesting.
+    text = normalize(text)
+    text = re.sub(r"(?m)^\s{0,3}(?:`{3,}|~{3,}).*$", "", text)
+    text = re.sub(r"(?m)^\s{0,3}\[[^\]]+\]:\s+.*$", "", text)
+    text = re.sub(
+        r"!?\[([^\]]*)\]\((?:[^()\n]|\([^()\n]*\))*\)|!?\[([^\]]*)\]\[[^\]]*\]",
+        lambda m: m[1] or m[2] or "",
+        text,
+    )
+    text = re.sub(r"<((?:https?://|mailto:)[^>]+)>", r"\1", text)
+    text = re.sub(r"<!--.*?-->|</?[A-Za-z][^>]*>", "", text, flags=re.DOTALL)
+    divider = (
+        r"(?m)^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)+\|?[ \t]*$"
+    )
+    if re.search(divider, text):
+        text = re.sub(divider, "", text)
+        text = re.sub(r"(?m)^.*\|.*$", lambda m: re.sub(r"(?<!\\)\|", " ", m[0]), text)
+    text = re.sub(
+        r"(?m)^\s{0,3}(?:#{1,6}\s+|(?:>\s*)+|[-+*]\s+|\d+[.)]\s+|(?:[-*_]\s*){3,}$|[=-]+$)",
+        "",
+        text,
+    )
+    text = re.sub(r"(?m)^\s*\[[ xX]\]\s+", "", text)
+    text = re.sub(r"(?<!\\)(`+)(.*?)(?<!\\)\1", r"\2", text, flags=re.DOTALL)
+    text = re.sub(
+        r"(?<!\\)(\*{1,3}|~~)(?=\S)(.*?\S)(?<!\\)\1",
+        r"\2",
+        text,
+        flags=re.DOTALL,
+    )
+    text = re.sub(
+        r"(?<![A-Za-z0-9_\\])(_{1,3})(?=\S)(.*?\S)(?<!\\)\1(?![A-Za-z0-9_])",
+        r"\2",
+        text,
+        flags=re.DOTALL,
+    )
+    text = re.sub(r"\\([\\`*_{}\[\]()#+.!>~-])", r"\1", text)
+    return " ".join(unescape(text).split())
 
 
 def stable(workspace, key):
@@ -145,6 +193,7 @@ def root_of(d, workspace, channel, thread_id):
         human = thread_id.startswith("legacy-user:")
         return TeamMessage(
             id=thread_id,
+            workspace_id=workspace.id,
             channel_id=channel.id,
             author_id=stable(workspace, "human" if human else "advisor"),
             text=run.prompt if human else run.response,
@@ -155,12 +204,12 @@ def root_of(d, workspace, channel, thread_id):
             thread_id=None,
         )
     root = d.get(TeamMessage, thread_id)
-    if root is None or root.channel_id != channel.id or root.thread_id:
+    if root is None or root.channel_id != channel.id or root.thread_id or root.kind == "reminder":
         raise ValueError("线程不存在 / Thread not found")
     return root
 
 
-def active_run(d, member):
+def active_run(d, member, statuses=ACTIVE):
     workspace = d.get(ResearchWorkspace, member.workspace_id)
     sessions = [member.session_id]
     if member.role == "advisor":
@@ -175,7 +224,7 @@ def active_run(d, member):
         ]
     own = d.scalar(
         select(AgentRun)
-        .where(AgentRun.session_id.in_(sessions), AgentRun.status.in_(ACTIVE))
+        .where(AgentRun.session_id.in_(sessions), AgentRun.status.in_(statuses))
         .order_by(AgentRun.created_at)
     )
     if own:
@@ -184,7 +233,7 @@ def active_run(d, member):
         select(AgentRun)
         .where(
             AgentRun.owner == workspace.owner,
-            AgentRun.status.in_(ACTIVE),
+            AgentRun.status.in_(statuses),
             or_(
                 AgentRun.runtime["team"]["member_id"].as_string() == member.id,
                 AgentRun.runtime["research"]["member_id"].as_string() == member.id,
@@ -207,7 +256,7 @@ def active_run(d, member):
             .where(
                 ResearchProject.workspace_id == workspace.id,
                 ResearchSprint.role.in_(roles),
-                AgentRun.status.in_(ACTIVE),
+                AgentRun.status.in_(statuses),
             )
             .order_by(AgentRun.created_at)
         )
@@ -273,18 +322,25 @@ def post(
     source_key=None,
     kind="text",
     trigger="message",
+    also_channel=False,
 ):
     if workspace.archived or channel.archived:
         raise ValueError("团队或频道已归档 / Team or channel archived")
     text = normalize(text).strip()
-    if not text or len(text) > 12000:
+    if (
+        not text and not any((data or {}).get(k) for k in ("forward", "quote"))
+    ) or len(text) > 12000:
         raise ValueError("消息为空或过长 / Empty or oversized message")
     root = root_of(d, workspace, channel, thread_id)
+    if also_channel:
+        validate_broadcast(channel, thread_id)
     members = ensure(d, workspace)
     author = author or next(m for m in members if m.role == "human")
     if author.workspace_id != workspace.id:
         raise ValueError("成员不属于团队 / Member outside team")
     tagged = mentions(d, workspace, text)
+    if (data or {}).get("forward") and channel.member_id and author.role == "human":
+        tagged = list(dict.fromkeys([*tagged, channel.member_id]))
     message = TeamMessage(
         workspace_id=workspace.id,
         channel_id=channel.id,
@@ -294,10 +350,13 @@ def post(
         kind=kind,
         mentions=tagged,
         relay=relay,
+        # A reply to a channel message starts its own scope; keep older thread routes.
         data={
             **(
                 {"routing_scope": root.data["routing_scope"]}
-                if isinstance(root, TeamMessage) and root.data.get("routing_scope")
+                if isinstance(root, TeamMessage)
+                and root.data.get("routing_scope")
+                and root.data["routing_scope"][2] is not None
                 else {}
             ),
             **(data or {}),
@@ -309,9 +368,45 @@ def post(
     from .team_workflows import route_message
 
     message.data = {**message.data, "mode": mode}
-    route_message(d, workspace, message, trigger=trigger)
+    if mode != "record":
+        route_message(d, workspace, message, trigger=trigger)
     workspace.updated_at = now()
+    if also_channel:
+        broadcast_reply(d, workspace, channel, message)
     return message
+
+
+def validate_broadcast(channel, thread_id):
+    if not thread_id or channel.member_id:
+        raise ValueError(
+            "只能同步频道线程回复 / Only channel thread replies can be broadcast"
+        )
+
+
+def broadcast_reply(d, workspace, channel, message):
+    """A durable channel reference; routing happens once on the original reply."""
+    validate_broadcast(channel, message.thread_id)
+    key = f"broadcast:{message.id}"
+    mirror = d.scalar(select(TeamMessage).where(TeamMessage.source_key == key))
+    if not mirror:
+        mirror = TeamMessage(
+            workspace_id=workspace.id,
+            channel_id=channel.id,
+            author_id=message.author_id,
+            text=message.text,
+            kind="thread_broadcast",
+            source_key=key,
+            data={
+                "thread_origin": {
+                    "thread_id": message.thread_id,
+                    "message_id": message.id,
+                }
+            },
+        )
+        d.add(mirror)
+    message.data = {**message.data, "also_channel": True}
+    d.flush()
+    return mirror
 
 
 def run_out(run):
@@ -319,6 +414,8 @@ def run_out(run):
         k: getattr(run, k)
         for k in (
             "id",
+            "model_config_id",
+            "model",
             "status",
             "response",
             "error",
@@ -331,6 +428,30 @@ def run_out(run):
 
 
 def message_out(d, message):
+    from .team_message_features import reactions
+
+    origin = (
+        message.data.get("thread_origin") if message.kind == "thread_broadcast" else None
+    )
+    if origin:
+        source = d.get(TeamMessage, origin.get("message_id"))
+        if source and source.channel_id == message.channel_id and source.thread_id:
+            value = message_out(d, source)
+            return {
+                **value,
+                "id": message.id,
+                "thread_id": None,
+                "kind": message.kind,
+                "created_at": message.created_at,
+                "data": {
+                    **value["data"],
+                    "read": message.data.get("read", False),
+                    "research_forwarded": False,
+                    "thread_origin": origin,
+                },
+                "replies": 0,
+                "reply_authors": [],
+            }
     out = {
         k: getattr(message, k)
         for k in (
@@ -346,6 +467,7 @@ def message_out(d, message):
         )
     }
     out["text"] = normalize(out["text"])
+    out["reactions"] = reactions(d, message.workspace_id, message.id)
     if message.kind == "sprint_reference":
         sprint = d.get(ResearchSprint, message.data.get("sprint_id"))
         out["text"] = normalize(sprint.summary) if sprint else ""
@@ -357,12 +479,27 @@ def message_out(d, message):
         if message.data.get("run_id")
         else None
     )
+    if message.data.get("commit") and "changes" not in message.data:
+        from . import research_repo, team_workspace
+
+        settings = d.info.get("settings")
+        commit = message.data["commit"]
+        # Older empty runs recorded HEAD even when they did not create a commit.
+        if settings and (not run or (run.runtime or {}).get("team_base") != commit):
+            try:
+                out["data"] = {
+                    **message.data,
+                    "changes": team_workspace.changes(
+                        research_repo.repo_dir(settings, message.workspace_id), commit
+                    ),
+                }
+            except (ValueError, research_repo.GitError):
+                pass  # A missing historical repository must not hide the conversation.
     if run:
         out["run"] = run_out(run)
         out["text"] = normalize(message.text or run.response)
         if (
-            run.status not in ACTIVE
-            and run.status != "cancelled"
+            run.status == "failed"
             and not out["text"]
             and not run.error
             and not message.data.get("links")
@@ -370,15 +507,46 @@ def message_out(d, message):
             out["run"]["error"] = "成员未返回回答 / Member returned no answer"
             out["run"]["status"] = "failed"
             out["run"]["runtime"] = {**(run.runtime or {}), "no_answer": True}
-    out["replies"] = len(
-        list(
-            d.scalars(select(TeamMessage.id).where(TeamMessage.thread_id == message.id))
+    replies = list(
+        d.execute(
+            select(TeamMessage.author_id, TeamMessage.created_at)
+            .where(TeamMessage.thread_id == message.id)
+            .order_by(TeamMessage.created_at.desc(), TeamMessage.id.desc())
         )
     )
+    out["replies"] = len(replies)
+    out["reply_authors"] = list(
+        dict.fromkeys(reply.author_id for reply in replies if reply.author_id)
+    )
+    out["last_message_at"] = replies[0].created_at if replies else message.created_at
     return out
 
 
+def has_message_content(message):
+    data = message["data"]
+    run = message.get("run") or {}
+    if not run:
+        # Only a member's run can end with nothing to say; notices always count.
+        return True
+    return bool(
+        message["text"].strip()
+        or data.get("files")
+        or data.get("attachments")
+        or (data.get("changes") or {}).get("files")
+        or data.get("links")
+        or data.get("forward")
+        or data.get("quote")
+        or data.get("file_error")
+        or run.get("error")
+        or (run.get("runtime") or {}).get("time_limit_reached")
+        or (run.get("runtime") or {}).get("budget_limit")
+        or run.get("status") in {"failed", "cancelled"}
+    )
+
+
 def research_root(project, channel, d):
+    from .team_message_features import reactions
+
     inherited = project.inherited_history or {}
     sprints = {s["id"] for s in inherited.get("sprints", [])}
     sprints.update(
@@ -417,6 +585,7 @@ def research_root(project, channel, d):
         text=project.question,
         kind="research",
         mentions=[],
+        reactions=reactions(d, project.workspace_id, f"research:{project.id}"),
         created_at=project.created_at,
         data={
             "research_id": project.id,
@@ -428,13 +597,17 @@ def research_root(project, channel, d):
 
 
 def history(d, workspace, channel, thread_id=None):
+    from .team_message_features import reactions
+
     root = root_of(d, workspace, channel, thread_id)
     rows = [
         message_out(d, m)
         for m in d.scalars(
             select(TeamMessage)
             .where(
-                TeamMessage.channel_id == channel.id, TeamMessage.thread_id == thread_id
+                TeamMessage.channel_id == channel.id,
+                TeamMessage.thread_id == thread_id,
+                TeamMessage.kind != "reminder",
             )
             .order_by(TeamMessage.created_at, TeamMessage.id)
         )
@@ -471,6 +644,7 @@ def history(d, workspace, channel, thread_id=None):
                 dict(
                     base,
                     id=f"legacy-user:{run.id}",
+                    reactions=reactions(d, workspace.id, f"legacy-user:{run.id}"),
                     author_id=stable(workspace, "human"),
                     text=normalize(run.prompt),
                     created_at=run.created_at,
@@ -481,6 +655,7 @@ def history(d, workspace, channel, thread_id=None):
                     dict(
                         base,
                         id=f"legacy:{run.id}",
+                        reactions=reactions(d, workspace.id, f"legacy:{run.id}"),
                         author_id=stable(workspace, "advisor"),
                         text=normalize(run.response or run.error),
                         created_at=run.updated_at,
@@ -526,8 +701,27 @@ def history(d, workspace, channel, thread_id=None):
             ],
             nodes=[node_out(n) for n in nodes(d, root)],
         )
-    return {
+    result = {
         "research": research,
+        # The conversation panel includes work and outputs inside its threads.
+        "activity": (
+            [
+                *rows,
+                *[
+                    message_out(d, message)
+                    for message in d.scalars(
+                        select(TeamMessage)
+                        .where(
+                            TeamMessage.channel_id == channel.id,
+                            TeamMessage.thread_id.is_not(None),
+                        )
+                        .order_by(TeamMessage.created_at, TeamMessage.id)
+                    )
+                ],
+            ]
+            if not thread_id
+            else []
+        ),
         "messages": sorted(rows, key=lambda m: (m["created_at"], m["id"])),
         "root": (
             research_root(root, channel, d)
@@ -538,9 +732,122 @@ def history(d, workspace, channel, thread_id=None):
         ),
         "research_id": root.id if isinstance(root, ResearchProject) else None,
     }
+    pins = set(
+        d.scalars(
+            select(TeamMessageMark.message_id).where(
+                TeamMessageMark.workspace_id == workspace.id,
+                TeamMessageMark.channel_id == channel.id,
+                TeamMessageMark.kind == "pin",
+                TeamMessageMark.owner == "",
+            )
+        )
+    )
+    for value in [*result["messages"], *result["activity"], result["root"]]:
+        if value is not None:
+            value["pinned"] = value["id"] in pins
+    return result
 
 
-def overview(d, workspace):
+def conversation_out(channel):
+    return {key: getattr(channel, key) for key in ("id", "key", "name", "member_id")}
+
+
+def activity(d, workspace, *, messages=None, values=None, unread_only=False):
+    """One event per message, with all applicable filters and shared read state."""
+    human = stable(workspace, "human")
+    channels = {
+        c.id: c
+        for c in d.scalars(
+            select(TeamChannel).where(
+                TeamChannel.workspace_id == workspace.id,
+                TeamChannel.archived.is_(False),
+            )
+        )
+    }
+    if messages is None:
+        messages = list(
+            d.scalars(
+                select(TeamMessage)
+                .where(TeamMessage.workspace_id == workspace.id)
+                .order_by(TeamMessage.created_at, TeamMessage.id)
+            )
+        )
+    by_id = {m.id: m for m in messages}
+    requested_runs = set(
+        d.scalars(
+            select(TeamDelivery.run_id)
+            .join(TeamMessage, TeamDelivery.message_id == TeamMessage.id)
+            .where(
+                TeamMessage.workspace_id == workspace.id,
+                TeamMessage.author_id == human,
+                TeamDelivery.run_id.is_not(None),
+                TeamDelivery.status.in_(["applied", "running", "steering"]),
+            )
+        )
+    )
+    participating = set(
+        f"research:{identifier}"
+        for identifier in d.scalars(
+            select(ResearchProject.id).where(
+                ResearchProject.workspace_id == workspace.id
+            )
+        )
+    )
+    events = []
+    for message in messages:
+        if message.channel_id not in channels:
+            continue
+        root = message.thread_id or message.id
+        if message.author_id == human:
+            participating.add(root)
+            continue
+        if unread_only and message.data.get("read"):
+            continue
+        value = (values or {}).get(message.id) or message_out(d, message)
+        run = value.get("run") or {}
+        runtime = run.get("runtime") or {}
+        types = []
+        if message.kind == "reminder":
+            types.append("reminder")
+        if message.kind == "member_paused":
+            types.append("paused")
+        if message.data.get("waiting"):
+            types.append("waiting")
+        if message.kind == "budget" or runtime.get("budget_limit"):
+            types.append("budget")
+        if (message.kind == "relay_limit" and not types) or runtime.get(
+            "time_limit_reached"
+        ):
+            types.append("limit")
+        if not types and not has_message_content(value):
+            continue
+        if human in message.mentions or human in message.data.get("to", []):
+            types.append("mention")
+        origin = by_id.get((runtime.get("team") or {}).get("message_id"))
+        if run.get("status") == "completed" and (
+            run["id"] in requested_runs or origin and origin.author_id == human
+        ):
+            types.append("completed")
+        if message.thread_id in participating:
+            types.append("reply")
+        if not types:
+            continue
+        events.append(
+            {
+                **value,
+                "activity_type": types[0],
+                "activity_types": types,
+                "actor_id": message.author_id
+                or (runtime.get("team") or {}).get("member_id"),
+                "channel": conversation_out(channels[message.channel_id]),
+                "unread": not message.data.get("read", False),
+                "preview": preview_text(value["text"]),
+            }
+        )
+    return list(reversed(events))
+
+
+def overview(d, workspace, *, include_reminders=True):
     members = ensure(d, workspace)
     channels = list(
         d.scalars(
@@ -550,11 +857,63 @@ def overview(d, workspace):
             )
         )
     )
-    from .team_members import config, file_out
+    from .team_members import avatar_out, config, file_out
+    from .team_presence import presence
 
+    active_deliveries = list(
+        d.execute(
+            select(TeamDelivery.member_id, TeamMessage.channel_id)
+            .join(TeamMessage, TeamMessage.id == TeamDelivery.message_id)
+            .outerjoin(AgentRun, AgentRun.id == TeamDelivery.run_id)
+            .where(
+                TeamDelivery.member_id.in_([member.id for member in members]),
+                TeamMessage.workspace_id == workspace.id,
+                TeamDelivery.status.in_(["queued", "running", "steering"]),
+                or_(TeamDelivery.run_id.is_(None), AgentRun.status.in_(ACTIVE)),
+            )
+        )
+    )
+    queued = {member_id for member_id, _ in active_deliveries}
+    working = {c.id: set() for c in channels}
+    for member_id, channel_id in active_deliveries:
+        if channel_id in working:
+            working[channel_id].add(member_id)
+    # A member can also have native research or legacy chat work in parallel.
+    for run, session_kind in d.execute(
+        select(AgentRun, AgentSession.kind)
+        .join(AgentSession, AgentSession.id == AgentRun.session_id)
+        .where(
+            AgentRun.owner == workspace.owner,
+            AgentRun.status.in_(ACTIVE),
+            or_(
+                AgentSession.workspace_id == workspace.id,
+                AgentRun.session_id.in_(
+                    select(ResearchProject.session_id).where(
+                        ResearchProject.workspace_id == workspace.id
+                    )
+                ),
+                AgentRun.runtime["team"]["workspace_id"].as_string() == workspace.id,
+            ),
+        )
+    ):
+        origin = (run.runtime or {}).get("team", {})
+        if not origin and (run.runtime or {}).get("research"):
+            origin = research_context(d, run.runtime["research"], workspace.owner) or {}
+        channel_id, member_id = origin.get("channel_id"), origin.get("member_id")
+        if not origin and session_kind in {"project_lead", "project_chat"}:
+            channel_id, member_id = (
+                stable(workspace, "dm:advisor"),
+                stable(workspace, "advisor"),
+            )
+        if channel_id in working and member_id in {m.id for m in members}:
+            working[channel_id].add(member_id)
     statuses = []
     for member in members:
-        run = active_run(d, member) if member.role != "human" else None
+        run = (
+            active_run(d, member, {"running"}) or active_run(d, member)
+            if member.role != "human"
+            else None
+        )
         waiting = (
             member.role != "human"
             and member.max_tokens
@@ -583,37 +942,75 @@ def overview(d, workspace):
                 id=member.id,
                 role=member.role,
                 **config(member),
+                **avatar_out(member, workspace.owner),
                 **(file_out(member) if member.role != "human" else {}),
                 library_id=member.library_id,
                 builtin=member.role in ROLES,
                 enabled=member.enabled and not member.deleted,
+                paused=member.paused,
                 deleted=member.deleted,
                 overrides=member.overrides,
                 subscriptions=member.subscriptions,
-                status="working" if run else "waiting" if waiting else "idle",
+                status="working"
+                if run and run.status == "running"
+                else "waiting"
+                if waiting
+                else "queued"
+                if run or member.id in queued
+                else "idle",
                 active_run_id=run.id if run else None,
+                **presence(d, workspace, member, run),
                 tokens=member.tokens,
                 max_tokens=member.max_tokens,
             )
         )
-    messages = list(
-        d.scalars(
+    messages = [
+        m
+        for m in d.scalars(
             select(TeamMessage)
             .where(TeamMessage.workspace_id == workspace.id)
-            .order_by(TeamMessage.created_at)
+            .order_by(TeamMessage.created_at, TeamMessage.id)
         )
-    )
+        if include_reminders or m.kind != "reminder"
+    ]
     human = stable(workspace, "human")
     participating = {m.thread_id or m.id for m in messages if m.author_id == human}
+    thread_roots = participating | {m.thread_id for m in messages if m.thread_id}
+    unread_messages = [
+        m
+        for m in messages
+        if m.author_id != human and not m.data.get("read") and m.kind != "reminder"
+    ]
+    unread_values = {m.id: message_out(d, m) for m in unread_messages}
+    unread_messages = [
+        m for m in unread_messages if has_message_content(unread_values[m.id])
+    ]
+    last_messages = {}
+    names = {m.id: m.name for m in members}
+    for message in reversed(messages):
+        if message.kind == "reminder":
+            continue
+        if message.channel_id in last_messages:
+            continue
+        value = unread_values.get(message.id) or message_out(d, message)
+        if not has_message_content(value):
+            continue
+        last_messages[message.channel_id] = {
+            "author_id": message.author_id,
+            "author_name": names.get(message.author_id, ""),
+            "text": preview_text(
+                value["text"]
+                or (
+                    value["data"].get("forward") or value["data"].get("quote") or {}
+                ).get("text", "")
+            ),
+            "created_at": message.created_at,
+        }
     unread = []
     for channel in channels:
         count = 0
-        for message in messages:
-            if (
-                message.channel_id != channel.id
-                or message.author_id == human
-                or message.data.get("read")
-            ):
+        for message in unread_messages:
+            if message.channel_id != channel.id:
                 continue
             count += 1
             if (
@@ -621,10 +1018,24 @@ def overview(d, workspace):
                 or message.thread_id in participating
                 or channel.member_id
             ):
-                unread.append(message_out(d, message))
+                unread.append(unread_values[message.id])
         channel.unread_count = count
+    unread_events = activity(
+        d, workspace, messages=messages, values=unread_values, unread_only=True
+    )
+    notifications = {m["id"]: m for m in unread}
+    notifications.update({event["id"]: event for event in unread_events})
     from .team_budgets import limits, tokens
 
+    pin_channels = list(
+        d.scalars(
+            select(TeamMessageMark.channel_id).where(
+                TeamMessageMark.workspace_id == workspace.id,
+                TeamMessageMark.kind == "pin",
+                TeamMessageMark.owner == "",
+            )
+        )
+    )
     return dict(
         workspace_id=workspace.id,
         workflow=workspace.workflow,
@@ -644,21 +1055,44 @@ def overview(d, workspace):
                 name=c.name,
                 member_id=c.member_id,
                 unread=c.unread_count,
+                pinned_count=pin_channels.count(c.id),
+                last_message=last_messages.get(c.id),
+                last_at=last_messages[c.id]["created_at"]
+                if c.id in last_messages
+                else c.created_at,
+                working_member_ids=sorted(working[c.id]),
             )
             for c in channels
         ],
-        notifications=unread[-100:],
+        notifications=sorted(
+            notifications.values(), key=lambda m: (m["created_at"], m["id"])
+        )[-100:],
+        threads_unread=sum(
+            (m.thread_id or m.id) in thread_roots for m in unread_messages
+        ),
+        mentions_unread=sum(human in m.mentions for m in unread_messages),
+        activity_unread=len(unread_events),
         tokens=tokens(d, workspace=workspace),
         max_tokens=limits(workspace)["max_tokens"],
         budget=limits(workspace),
     )
 
 
+def work_overview(d, workspace):
+    from .team_work import project
+
+    return project(d, workspace)
+
+
 def context(d, workspace, message):
     from .research_chat import context as project_context
+    from .team_member_context import CONTENT_BOUNDARY, read_messages
+    from .team_message_marks import context_pins
 
     channel = channel_of(d, workspace, message.channel_id)
-    recent = history(d, workspace, channel, message.thread_id)["messages"][-40:]
+    recent = read_messages(
+        d, workspace, channel, message.thread_id, limit=40, max_chars=20000, latest=True
+    )
     board = []
     for c in d.scalars(
         select(TeamChannel).where(
@@ -667,58 +1101,78 @@ def context(d, workspace, message):
             TeamChannel.archived.is_(False),
         )
     ):
-        tail = list(
-            d.scalars(
-                select(TeamMessage)
-                .where(TeamMessage.channel_id == c.id)
-                .order_by(TeamMessage.created_at.desc())
-                .limit(4)
-            )
-        )
         board.append(
             {
                 "channel_id": c.id,
                 "name": c.name,
-                "recent": [normalize(m.text)[-800:] for m in reversed(tail)],
+                "recent": read_messages(
+                    d,
+                    workspace,
+                    c,
+                    limit=4,
+                    max_chars=3200,
+                    latest=True,
+                    include_threads=True,
+                ),
             }
         )
+    roster = overview(d, workspace, include_reminders=False)["members"]
     return (
         language_part(d, workspace)
+        + CONTENT_BOUNDARY
         + project_context(d, workspace)[:16000]
         + "\n\nTeam blackboard:\n"
         + json.dumps(board, ensure_ascii=False)
-        + "\n\nConversation (latest 40, bounded):\n"
-        + json.dumps(recent, ensure_ascii=False, default=str)[-20000:]
-        + f"\nChannel: {channel.id}; Thread: {message.thread_id or message.id}\n"
-        + "Members: "
-        + json.dumps(
-            [
-                {"id": m.id, "role": m.role, "name": m.name}
-                for m in ensure(d, workspace)
-            ],
-            ensure_ascii=False,
+        + "\n\nChannel pins:\n"
+        + json.dumps(context_pins(d, workspace, channel.id), ensure_ascii=False)
+        + "\n\nConversation (latest 40, bounded; team_read_channel / team_read_thread for more):\n"
+        + json.dumps(recent, ensure_ascii=False)
+        + (
+            "\n\n完成标准 / Done when: " + message.data["done_when"]
+            if message.data.get("done_when")
+            else ""
         )
-        + "\nTo have members act, name them in team_send_message's `to`;"
+        + f"\nChannel: {channel.id}; Thread: {message.thread_id}\n"
+        + "Members:\n"
+        + "\n".join(
+            f"{m['name']} · {' '.join((m.get('description') or m['role']).split())} · "
+            + (
+                "disabled"
+                if not m["enabled"]
+                else "paused" if m["paused"] else m.get("status_text") or m["status"]
+            )
+            for m in roster
+            if not m["deleted"]
+        )
+        + "\nTo have members act, name them in team_send_message's `wake`;"
         " @Name in text only refers to them.\n"
+        # Repeated last: long contexts drift from the first lines.
+        + language_part(d, workspace).strip().splitlines()[-1]
+        + "\n"
     )
 
 
 def dispatch(settings, d, workspace, delivery):
+    from .team_member_context import CONTENT_BOUNDARY, trigger_text
+    from .team_message_features import feedback_part
+
     member = d.get(TeamMember, delivery.member_id)
     message = d.get(TeamMessage, delivery.message_id)
-    text = message_out(d, message)["text"]
+    text = trigger_text(d, message)
     attachment_ids = [a["id"] for a in message.data.get("attachments", [])]
     for identifier in delivery.action.get("merged_messages", []):
         extra = d.get(TeamMessage, identifier)
         if extra:
-            text += "\n\n" + extra.text
+            text += "\n\n" + trigger_text(d, extra)
             attachment_ids.extend(a["id"] for a in extra.data.get("attachments", []))
     if delivery.action.get("instruction"):
-        text += "\n\n" + delivery.action["instruction"]
+        text += "\n\nRule instruction:\n" + delivery.action["instruction"]
     if delivery.status != "queued":
         return
     if not member.enabled or member.deleted:
         delivery.status, delivery.error = "cancelled", "成员已停用 / Member disabled"
+        return
+    if member.paused:
         return
     run = active_run(d, member)
     if run:
@@ -815,14 +1269,14 @@ def dispatch(settings, d, workspace, delivery):
         workspace_id=workspace.id,
         member_id=member.id,
         channel_id=channel.id,
-        thread_id=message.thread_id or message.id,
+        thread_id=message.thread_id,
         message_id=message.id,
         relay=relay,
         routing_scope=message.data.get("routing_scope")
         or [
             workspace.id,
             channel.id,
-            delivery.action.get("thread", message.thread_id or message.id),
+            message.thread_id,
         ],
         **delivery.action,
     )
@@ -834,9 +1288,11 @@ def dispatch(settings, d, workspace, delivery):
         model=model,
         prompt=text,
         context=language
+        + CONTENT_BOUNDARY
         + description(member)
         + "\n\n"
-        + context(d, workspace, message).removeprefix(language),
+        + context(d, workspace, message).removeprefix(language + CONTENT_BOUNDARY)
+        + feedback_part(d, member),
         attachment_ids=list(dict.fromkeys(attachment_ids)),
         lane="research",
         runtime={"team": team, **snapshot(member)},
@@ -851,6 +1307,12 @@ def dispatch(settings, d, workspace, delivery):
         author_id=member.id,
         data={
             "run_id": run.id,
+            **({"woken_by": author.id} if author and author.role != "human" else {}),
+            **(
+                {"done_when": message.data["done_when"]}
+                if message.data.get("done_when")
+                else {}
+            ),
             **{
                 k: delivery.action[k]
                 for k in ("rule", "workflow", "workflow_version")
@@ -900,7 +1362,7 @@ def settle(settings, maker):
                                 TeamMessage(
                                     workspace_id=workspace.id,
                                     channel_id=incoming.channel_id,
-                                    thread_id=incoming.thread_id or incoming.id,
+                                    thread_id=incoming.thread_id,
                                     author_id=delivery.member_id,
                                     data={"run_id": run.id},
                                     source_key=f"steer:{delivery.id}",
@@ -909,8 +1371,17 @@ def settle(settings, maker):
                 elif delivery.status == "running":
                     run = d.get(AgentRun, delivery.run_id)
                     if run.status not in ACTIVE:
+                        run.runtime = {
+                            k: v
+                            for k, v in (run.runtime or {}).items()
+                            if k != "team_status"
+                        }
                         delivery.status = (
-                            "applied" if run.status == "completed" else "failed"
+                            "applied"
+                            if run.status == "completed"
+                            else "cancelled"
+                            if run.status == "cancelled"
+                            else "failed"
                         )
                         delivery.error = run.error
                         response = d.scalar(
@@ -919,6 +1390,8 @@ def settle(settings, maker):
                             )
                         )
                         if response:
+                            # The placeholder becomes a reply at the run's terminal time.
+                            response.created_at = run.updated_at
                             response.data = {**response.data, "read": False}
                             if run.runtime.get("time_limit_reached") or run.runtime.get(
                                 "budget_limit"
@@ -1096,7 +1569,7 @@ def available(d, project, role):
     budget = limits(workspace)
     if member is None:
         return True
-    if not member.enabled or member.deleted or active_run(d, member):
+    if member.paused or not member.enabled or member.deleted or active_run(d, member):
         return False
     reason = (
         "member_total_tokens"

@@ -1,0 +1,123 @@
+.page {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--ui-space-32);
+}
+.body {
+  max-width: var(--ui-page-width);
+  margin: 0 auto;
+}
+.body h2 {
+  margin: 0 0 var(--ui-space-24);
+  font-family: var(--ui-font-display);
+  font-size: var(--ui-text-24);
+  font-weight: var(--ui-weight-regular);
+}
+.attention {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-space-8) var(--ui-space-16);
+  color: var(--ui-fg-2);
+  font-size: var(--ui-text-12);
+}
+.group,
+.researches {
+  margin-top: var(--ui-space-24);
+}
+.group h2,
+.group summary,
+.researches summary,
+.researches h3 {
+  margin: 0 0 var(--ui-space-12);
+  color: var(--ui-fg-2);
+  font-family: var(--ui-font-sans);
+  font-size: var(--ui-text-13);
+  font-weight: var(--ui-weight-strong);
+}
+.researches section {
+  padding: var(--ui-space-12) 0;
+}
+.group ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-12);
+  width: 100%;
+  min-height: var(--ui-control-lg);
+  padding: var(--ui-space-12) 0;
+  border: 0;
+  border-bottom: 1px solid var(--ui-edge-subtle);
+  background: transparent;
+  color: var(--ui-fg);
+  font: inherit;
+  font-size: var(--ui-text-13);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.row:hover {
+  background: var(--ui-hover);
+}
+.row:focus-visible,
+.group summary:focus-visible,
+.researches summary:focus-visible {
+  outline: none;
+  box-shadow: var(--ui-focus-ring);
+}
+.group summary,
+.researches summary {
+  cursor: pointer;
+}
+/* One column wide for every row, so the text starts at the same place; several owners overlap. */
+.avatars {
+  display: flex;
+  flex: none;
+  /* Room for three: one avatar and two more at a 16px step. */
+  width: calc(var(--ui-control-sm) + 2 * var(--ui-space-16));
+}
+.avatars > span {
+  display: flex;
+  width: var(--ui-control-sm);
+  height: var(--ui-control-sm);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--ui-bg);
+}
+.avatars > span + span {
+  margin-left: calc(-1 * var(--ui-space-12));
+}
+.content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: var(--ui-space-4);
+}
+.title,
+.status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status,
+.elapsed {
+  color: var(--ui-fg-2);
+  font-size: var(--ui-text-12);
+}
+.elapsed {
+  flex: none;
+}
+.stuck {
+  color: var(--ui-danger);
+  font-size: var(--ui-text-12);
+}
+.loading {
+  min-height: var(--ui-control-lg);
+  margin: var(--ui-space-32);
+  border-radius: var(--ui-r-8);
+  background: var(--ui-bg-1);
+}

@@ -8,6 +8,7 @@ Messages never name an exception class and never carry headers or bodies.
 """
 
 import json
+import logging
 from typing import Literal
 
 import httpx
@@ -78,6 +79,10 @@ def from_transport(error: Exception) -> ModelError:
     if isinstance(error, (httpx.RemoteProtocolError, httpx.ReadError)):
         return ModelError("interrupted", INTERRUPTED)
     if isinstance(error, (json.JSONDecodeError, KeyError, IndexError, TypeError)):
+        # These also arise from our own parsing; keep the trace for diagnosis.
+        logging.getLogger(__name__).warning(
+            "Model response not understood", exc_info=error
+        )
         return ModelError("malformed", MALFORMED)
     # Any other transport trouble (refused write, bad redirect, ...) means the
     # service could not be used as configured.

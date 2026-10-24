@@ -76,3 +76,227 @@ export const workflowFixture: Workflow = {
     channels: { lab: { x: 0, y: 190 }, papers: { x: 340, y: 190 } },
   },
 };
+
+// Research topology with parallel channel rules, review feedback and a self-loop.
+export const researchWorkflowFixture: Workflow = {
+  id: "research",
+  name: "Research",
+  builtin: true,
+  version: 1,
+  rules: [
+    {
+      id: "research:start",
+      enabled: true,
+      when: {
+        event: "message",
+        from_role: "owner",
+        channel: "lab",
+      },
+      then: {
+        action: "wake",
+        role: "advisor",
+      },
+      limit: {
+        per_thread: 0,
+      },
+    },
+    {
+      id: "research:approved-start",
+      enabled: true,
+      when: {
+        event: "plan_approved",
+        from_role: "owner",
+        channel: "lab",
+      },
+      then: {
+        action: "wake",
+        role: "executor",
+      },
+      limit: {
+        per_thread: 0,
+      },
+    },
+    {
+      id: "research:0:wait",
+      enabled: true,
+      when: {
+        event: "message",
+        from_role: "advisor",
+        kind: "plan",
+        channel: "lab",
+      },
+      then: {
+        action: "wait_for_owner",
+      },
+      limit: {
+        per_thread: 0,
+      },
+    },
+    {
+      id: "research:1:result",
+      enabled: true,
+      when: {
+        event: "message",
+        from_role: "executor",
+        kind: "result",
+        channel: "lab",
+      },
+      then: {
+        action: "review",
+        role: "advisor",
+        on_fail: "executor",
+      },
+      limit: {
+        per_thread: 0,
+      },
+    },
+    {
+      id: "research:1:review",
+      enabled: true,
+      when: {
+        event: "message",
+        from_role: "advisor",
+        kind: "review",
+        channel: "lab",
+      },
+      then: {
+        action: "wake",
+        role: "executor",
+      },
+      limit: {
+        per_thread: 0,
+      },
+    },
+    {
+      id: "research:1:job",
+      enabled: true,
+      when: {
+        event: "job_finished",
+      },
+      then: {
+        action: "wake",
+        role: "executor",
+      },
+      limit: {
+        per_thread: 0,
+      },
+    },
+    {
+      id: "research:1:wait",
+      enabled: true,
+      when: {
+        event: "conclusion_proposed",
+        from_role: "advisor",
+        channel: "lab",
+      },
+      then: {
+        action: "wait_for_owner",
+      },
+      limit: {
+        per_thread: 0,
+      },
+    },
+    {
+      id: "research:1:approved",
+      enabled: true,
+      when: {
+        event: "plan_approved",
+        from_role: "owner",
+        kind: "conclusion",
+        channel: "lab",
+      },
+      then: {
+        action: "wake",
+        role: "distiller",
+      },
+      limit: {
+        per_thread: 0,
+      },
+    },
+    {
+      id: "research:2:continue",
+      enabled: true,
+      when: {
+        event: "message",
+        from_role: "distiller",
+        kind: "text",
+        channel: "lab",
+      },
+      then: {
+        action: "wake",
+        role: "distiller",
+      },
+      limit: {
+        per_thread: 0,
+      },
+    },
+    {
+      id: "research:2:done",
+      enabled: true,
+      when: {
+        event: "message",
+        from_role: "distiller",
+        kind: "result",
+        channel: "lab",
+      },
+      then: {
+        action: "wait_for_owner",
+      },
+      limit: {
+        per_thread: 0,
+      },
+    },
+    {
+      id: "research:discuss-conclusion",
+      enabled: true,
+      when: {
+        event: "message",
+        from_role: "owner",
+        kind: "text",
+        channel: "lab",
+      },
+      then: {
+        action: "wake",
+        role: "advisor",
+      },
+      limit: {
+        per_thread: 0,
+      },
+    },
+    {
+      id: "research:reopen",
+      enabled: true,
+      when: {
+        event: "plan_approved",
+        from_role: "owner",
+        kind: "result",
+        channel: "lab",
+      },
+      then: {
+        action: "wake",
+        role: "executor",
+      },
+      limit: {
+        per_thread: 0,
+      },
+    },
+    ...(["job_finished", "plan_approved", "review_failed"] as const).map(
+      (event) => ({
+        id: `research:lab:${event}`,
+        enabled: true,
+        when: { event, channel: "lab" },
+        then: { action: "wake" as const, role: "executor" },
+      }),
+    ),
+  ],
+  layout: {
+    members: {},
+    channels: {},
+  },
+};
+export const researchWorkflowMembers: WorkflowMember[] = [
+  { id: "owner", name: "Leslie", kind: "human", role: "owner" },
+  { id: "advisor", name: "Advisor", kind: "agent", role: "advisor" },
+  { id: "executor", name: "Alex", kind: "agent", role: "executor" },
+  { id: "distiller", name: "Distiller", kind: "agent", role: "distiller" },
+];

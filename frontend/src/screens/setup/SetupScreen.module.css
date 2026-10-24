@@ -10,7 +10,7 @@
   box-sizing: border-box;
   min-height: 100dvh;
   padding: var(--ui-space-24) var(--ui-space-16);
-  background: var(--ui-bg-1);
+  background: var(--ui-bg);
   color: var(--ui-fg);
   font: var(--ui-text-13) / var(--ui-leading) var(--ui-font-sans);
   -webkit-font-smoothing: antialiased;
@@ -40,7 +40,7 @@
   margin: 0;
   font-family: var(--ui-font-display);
   font-size: var(--ui-text-24);
-  font-weight: var(--ui-weight-strong);
+  font-weight: var(--ui-weight-regular);
   line-height: var(--ui-leading-tight);
 }
 

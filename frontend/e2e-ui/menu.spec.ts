@@ -16,13 +16,15 @@ const cssOf = (locator: Locator, property: string) =>
     property,
   );
 
-/** Wait for every running color or move transition, so colors are the settled ones. */
+/** Wait for finite transitions and menu animations before reading settled geometry. */
 const settled = (page: Page) =>
   page.evaluate(() =>
     Promise.all(
       document
         .getAnimations()
-        .filter((animation) => animation instanceof CSSTransition)
+        .filter(
+          (animation) => animation.effect?.getTiming().iterations !== Infinity,
+        )
         .map((animation) => animation.finished.catch(() => undefined)),
     ),
   );
@@ -132,6 +134,7 @@ test("it opens below the button, level with its start edge, in the top layer", a
   await more(page).focus();
   await page.keyboard.press("ArrowDown");
   await expect(item(page, "Rename")).toBeFocused();
+  await settled(page);
   const [list, trigger] = await Promise.all([
     menu(page).evaluate((el) => el.getBoundingClientRect().toJSON()),
     more(page).evaluate((el) => el.getBoundingClientRect().toJSON()),
@@ -326,12 +329,16 @@ test("the measurements are the design's", async ({ page }) => {
   const list = menu(page);
   const rename = item(page, "Rename");
   expect(await cssOf(list, "min-width")).toBe("180px");
-  expect(await cssOf(list, "border-top-left-radius")).toBe("12px");
-  expect(await cssOf(list, "padding-top")).toBe("4px");
+  expect(await cssOf(list, "border-top-left-radius")).toBe("16px");
+  expect(await cssOf(list, "padding-top")).toBe("6px");
   expect(await cssOf(list, "background-color")).toBe(
     await resolved(page, "var(--ui-elev)"),
   );
-  expect(await cssOf(rename, "height")).toBe("32px");
+  expect(await cssOf(rename, "min-height")).toBe("34px");
+  expect(await cssOf(rename, "height")).toBe("34px");
+  expect(await cssOf(rename, "font-size")).toBe("14px");
+  expect(await cssOf(rename, "padding-top")).toBe("5px");
+  expect(await cssOf(rename, "padding-bottom")).toBe("5px");
   expect(await cssOf(rename, "padding-left")).toBe("10px");
   expect(await cssOf(rename, "padding-right")).toBe("10px");
   expect(await cssOf(rename, "border-top-left-radius")).toBe("8px");
@@ -339,6 +346,8 @@ test("the measurements are the design's", async ({ page }) => {
   expect(await cssOf(separator, "height")).toBe("1px");
   expect(await cssOf(separator, "margin-top")).toBe("4px");
   expect(await cssOf(separator, "margin-bottom")).toBe("4px");
+  expect(await cssOf(separator, "margin-left")).toBe("6px");
+  expect(await cssOf(separator, "margin-right")).toBe("6px");
   expect(await cssOf(separator, "background-color")).toBe(
     await resolved(page, "var(--ui-edge-subtle)"),
   );
@@ -346,14 +355,53 @@ test("the measurements are the design's", async ({ page }) => {
   expect(await cssOf(rename, "color")).toBe(
     await resolved(page, "var(--ui-fg)").then((c) => c),
   );
+  expect(await cssOf(rename.locator("svg"), "color")).toBe(
+    await resolved(page, "var(--ui-fg-1)"),
+  );
+  expect(await cssOf(item(page, "Duplicate").locator("svg"), "color")).toBe(
+    await resolved(page, "var(--ui-fg-3)"),
+  );
   await page.keyboard.press("End");
   expect(await cssOf(item(page, "Delete"), "color")).toBe(
     await resolved(page, "var(--ui-danger-text)"),
   );
   // The resting color of an item that is not current.
   expect(await cssOf(item(page, "Duplicate"), "color")).toBe(
-    await resolved(page, "var(--ui-fg-1)"),
+    await resolved(page, "var(--ui-fg)"),
   );
+});
+
+test("a pressed menu item uses the active layer", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await openWithKeyboard(page);
+  const rename = item(page, "Rename");
+  await rename.hover();
+  await page.mouse.down();
+  await expect(rename).toHaveCSS(
+    "background-color",
+    await resolved(page, "var(--ui-active)"),
+  );
+  await page.mouse.up();
+});
+
+test("menus scale in from the top and respect reduced motion", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await openWithKeyboard(page);
+  await expect(menu(page)).toHaveCSS("animation-duration", "0.37s");
+  await expect(menu(page)).toHaveCSS(
+    "animation-timing-function",
+    "cubic-bezier(0.23, 1, 0.32, 1)",
+  );
+  await expect(menu(page)).toHaveCSS("transform-origin", /px 0px$/);
+  await settled(page);
+  await expect(menu(page)).toHaveCSS("transform", "none");
+  await page.keyboard.press("Escape");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await more(page).focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(menu(page)).toHaveCSS("animation-name", "none");
 });
 
 for (const theme of ["light", "dark"] as const) {

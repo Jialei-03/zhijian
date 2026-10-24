@@ -26,6 +26,7 @@ import uvicorn
 from ..filelock import lock_nowait
 from .paths import PACKAGE, agent_runtime_dir, data_dir
 from .supervisor import Supervisor
+from .logs import app_logging
 
 WORKERS = (
     "agent_worker",
@@ -137,11 +138,15 @@ def agent_runtime(data, node):
     partial = target.with_name(target.name + ".partial")
     shutil.rmtree(partial, ignore_errors=True)
     shutil.copytree(source, partial, ignore=shutil.ignore_patterns("node_modules"))
-    subprocess.run(
+    installed = subprocess.run(
         [npm, "ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"],
         cwd=partial,
-        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
     )
+    say(installed.stdout)
+    installed.check_returncode()
     shutil.rmtree(target, ignore_errors=True)
     partial.rename(target)
     return target
@@ -271,6 +276,18 @@ def main(argv=None):
             webbrowser.open(url)
         return 0
     configure(data, args.host, args.port)
+    try:
+        with app_logging(data):
+            return serve(args, data, url)
+    except Exception:
+        # app_logging already reported the redacted traceback. Do not print an
+        # unfiltered copy after restoring stderr (the desktop also records it).
+        return 1
+    finally:
+        instance.close()
+
+
+def serve(args, data, url):
     say(f"Data folder: {data}")
     migrate()
     reader = ensure_reader()
@@ -296,32 +313,33 @@ def main(argv=None):
     workers = Supervisor(
         WORKERS if agent else tuple(w for w in WORKERS if w != "agent_worker"),
         PACKAGE.parent,
+        log_dir=data / "logs",
         log=say,
     )
-    workers.start()
     stopping = threading.Event()
-    if args.desktop or not args.no_browser:
-        threading.Thread(
-            target=open_when_ready, args=(url, stopping, args.desktop), daemon=True
-        ).start()
-    say(f"Open Research Agent is running at {url} as “{reader}”. Press Ctrl+C to stop.")
-    server = Server(
-        uvicorn.Config(
-            app,
-            host=args.host,
-            port=args.port,
-            log_level="warning",
-            access_log=False,
-        )
-    )
     try:
+        workers.start()
+        if args.desktop or not args.no_browser:
+            threading.Thread(
+                target=open_when_ready, args=(url, stopping, args.desktop), daemon=True
+            ).start()
+        say(f"Open Research Agent is running at {url} as “{reader}”. Press Ctrl+C to stop.")
+        server = Server(
+            uvicorn.Config(
+                app,
+                host=args.host,
+                port=args.port,
+                log_level="warning",
+                access_log=False,
+                log_config=None,
+            )
+        )
         server.run()
     except KeyboardInterrupt:
         pass
     finally:
         stopping.set()
         workers.stop()
-        instance.close()
     say("Stopped.")
     return 0
 

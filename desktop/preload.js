@@ -7,5 +7,11 @@ const mark = () => {
   if (root) root.dataset.desktop = process.platform || "desktop";
   return !!root;
 };
-if (!mark()) document.addEventListener("readystatechange", mark, { once: true });
+if (!mark())
+  document.addEventListener("readystatechange", mark, { once: true });
 window.addEventListener("DOMContentLoaded", mark);
+
+const { contextBridge, ipcRenderer } = require("electron");
+contextBridge.exposeInMainWorld("oraDesktop", {
+  notifyReminder: (value) => ipcRenderer.send("team-reminder", value),
+});

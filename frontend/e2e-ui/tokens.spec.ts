@@ -31,7 +31,63 @@ for (const theme of ["light", "dark"] as const) {
       ),
     ).toBeGreaterThanOrEqual(4.5);
   });
+
+  test(`elevations have the ${theme} edge rings`, async ({ page }) => {
+    await openKit(page, { theme });
+    const shadows = await page.evaluate(() => {
+      const probe = document.createElement("div");
+      document.body.append(probe);
+      const values = [
+        "ring-1",
+        "ring-2",
+        "elev-1",
+        "elev-2",
+        "elev-3",
+        "elev-composer",
+      ].map((name) => {
+        probe.style.boxShadow = `var(--ui-${name})`;
+        return getComputedStyle(probe).boxShadow;
+      });
+      probe.remove();
+      return values;
+    });
+    const [ring1, ring2, attached, floating, modal, composer] = shadows;
+    expect(attached).toContain(ring1);
+    for (const shadow of [floating, modal, composer])
+      expect(shadow).toContain(ring2);
+    for (const ring of [ring1, ring2]) {
+      expect(ring).not.toBe("none");
+      expect(ring.includes("inset")).toBe(theme === "dark");
+    }
+    if (theme === "dark") {
+      expect(ring1).toContain("rgba(255, 255, 255, 0.06)");
+      expect(ring1).toContain("rgba(0, 0, 0, 0.4)");
+      expect(ring2).toContain("rgba(255, 255, 255, 0.1)");
+      expect(ring2).toContain("rgba(0, 0, 0, 0.5)");
+    }
+  });
 }
+
+test("layout and font features match the desktop reference", async ({
+  page,
+}) => {
+  await openKit(page);
+  const html = page.locator("html");
+  for (const [token, value] of [
+    ["--ui-sidebar-width", "264px"],
+    ["--ui-sidebar-top", "52px"],
+    ["--ui-settings-nav", "260px"],
+    ["--ui-dialog-md", "540px"],
+  ])
+    await expect(html).toHaveCSS(token, value);
+  await expect(html).toHaveCSS(
+    "font-feature-settings",
+    '"cv11", "ss03", "calt"',
+  );
+  await expect(html).toHaveCSS("font-optical-sizing", "auto");
+  await expect(html).toHaveCSS("font-synthesis-weight", "none");
+  await expect(html).toHaveCSS("text-autospace", "normal");
+});
 test("system appearance follows the OS live", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "light" });
   await page.goto("/ui-kit.html");

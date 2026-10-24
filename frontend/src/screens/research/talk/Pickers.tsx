@@ -1,5 +1,5 @@
 import { Check, ChevronDown, Cpu, Sparkles } from "lucide-react";
-import { Menu, type MenuEntry } from "../../../ui";
+import { Button, Menu, type MenuEntry } from "../../../ui";
 import type { ModelRow } from "../../setup/model-api";
 import type { Compute } from "../research-api";
 import styles from "./Talk.module.css";
@@ -21,11 +21,18 @@ function Picker({
       items={items}
       placement={{ side: "top", align: "start" }}
       trigger={(props) => (
-        <button type="button" className={styles.chip} {...props}>
-          <Icon size={14} aria-hidden />
-          <span className={styles.pickerName}>{current}</span>
-          <ChevronDown size={12} aria-hidden />
-        </button>
+        <Button
+          {...props}
+          size="sm"
+          variant="ghost"
+          icon={Icon}
+          className={styles.chip}
+        >
+          <span className={styles.pickerName}>
+            <span>{current}</span>
+            <ChevronDown size={16} aria-hidden />
+          </span>
+        </Button>
       )}
     />
   );

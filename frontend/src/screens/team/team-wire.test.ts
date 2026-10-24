@@ -49,8 +49,20 @@ const team: Team = {
 describe("team workflow wiring", () => {
   it("maps Step 1 identities into trusted contract roles", () => {
     expect(workflowMembers(team, (key) => en[key])).toEqual([
-      { id: "owner", name: "Researcher", kind: "human", role: "owner" },
-      { id: "agent", name: "Advisor", kind: "agent", role: "advisor" },
+      {
+        id: "owner",
+        name: "Researcher",
+        kind: "human",
+        role: "owner",
+        avatar_seed: "owner",
+      },
+      {
+        id: "agent",
+        name: "Advisor",
+        kind: "agent",
+        role: "advisor",
+        avatar_seed: "advisor",
+      },
     ]);
   });
   it("keeps the rule identity and workflow version in message navigation", () => {

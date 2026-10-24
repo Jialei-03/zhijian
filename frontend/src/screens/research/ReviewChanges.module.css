@@ -1,0 +1,124 @@
+.review {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ui-space-8);
+  padding: var(--ui-space-12);
+}
+.scope {
+  min-width: 0;
+  max-width: 100%;
+}
+.scope > span {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-6);
+  min-width: 0;
+}
+.scope > span > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scope svg {
+  flex: none;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-4);
+  margin-left: auto;
+}
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--ui-space-2) var(--ui-space-12) var(--ui-space-12);
+  scrollbar-width: thin;
+}
+.file {
+  margin-bottom: var(--ui-space-10);
+  border-radius: var(--ui-r-12);
+  box-shadow: var(--ui-elev-1);
+  background: var(--ui-bg);
+  overflow: hidden;
+}
+.fileHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-8);
+  min-height: var(--ui-control-lg);
+  padding: var(--ui-space-2) var(--ui-space-6) var(--ui-space-2)
+    var(--ui-space-10);
+  background: var(--ui-fill);
+  cursor: pointer;
+  list-style: none;
+}
+.fileHead::-webkit-details-marker {
+  display: none;
+}
+.fileHead:hover {
+  background: var(--ui-hover);
+}
+.fileHead > svg,
+.fileHead button,
+.fileHead > span:nth-of-type(2) {
+  flex: none;
+}
+.chevron {
+  color: var(--ui-fg-3);
+}
+.file[open] > summary .chevron {
+  transform: rotate(90deg);
+}
+.diff {
+  overflow: auto;
+  border-top: 1px solid var(--ui-edge-subtle);
+}
+.patch {
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  font: var(--ui-text-13) / var(--ui-space-20) var(--ui-font-mono);
+  tab-size: 4;
+}
+.line {
+  display: grid;
+  grid-template-columns: var(--ui-space-40) var(--ui-space-40) 1fr;
+}
+.line code {
+  padding: 0 var(--ui-space-10);
+  font: inherit;
+}
+.gutter {
+  padding-right: var(--ui-space-8);
+  color: var(--ui-fg-3);
+  text-align: right;
+  user-select: none;
+}
+.line[data-kind="add"] {
+  background: var(--ui-diff-add);
+}
+.line[data-kind="del"] {
+  background: var(--ui-diff-del);
+}
+.line[data-kind="hunk"],
+.line[data-kind="meta"] {
+  color: var(--ui-fg-3);
+}
+.empty,
+.error {
+  margin: 0;
+  padding: var(--ui-space-12);
+  font-size: var(--ui-text-12);
+  color: var(--ui-fg-3);
+}
+.error {
+  color: var(--ui-danger-text);
+}

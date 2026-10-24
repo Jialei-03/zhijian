@@ -40,6 +40,9 @@ export interface TooltipProps {
  * own in the layout (it is `display: contents`); the events of the child bubble
  * up to it.
  */
+/** Set on an element for the moment a closing menu gives it the focus back. */
+export const RETURNED_FOCUS = "data-returned-focus";
+
 export function Tooltip({
   content,
   shortcut,
@@ -115,8 +118,14 @@ export function Tooltip({
         hide();
       }}
       onFocus={(event) => {
-        // Only focus that came by keyboard: a click focuses too, and must not pop one up.
-        if (!controlled && event.target.matches(":focus-visible")) show();
+        // Only focus that came by keyboard: a click focuses too, and must not pop one up. Nor does
+        // focus a menu hands back as it closes: the next Escape belongs to what is around it.
+        if (
+          !controlled &&
+          event.target.matches(":focus-visible") &&
+          !event.target.hasAttribute(RETURNED_FOCUS)
+        )
+          show();
       }}
       onBlur={() => {
         if (!controlled) hide();

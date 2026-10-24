@@ -6,26 +6,41 @@ from uuid import uuid4
 
 from fastapi import Depends, HTTPException
 from pydantic import Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from . import research_team as team
 from . import team_members as members
 from .models import AgentRun, TeamChannel, TeamDelivery, TeamMember, TeamMessage
 from .schemas import Strict
 from .team_budgets import TeamBudget
+from .team_reminders import ReminderInput
+
+
+class QuoteInput(Strict):
+    message_id: str = Field(min_length=1, max_length=80)
+    text: str = Field(min_length=1, max_length=12000)
 
 
 class MessageInput(Strict):
-    text: str = Field(min_length=1, max_length=12000)
+    text: str = Field(default="", max_length=12000)
     thread_id: str | None = Field(default=None, max_length=80)
-    mode: Literal["queue", "immediate"] = "queue"
+    mode: Literal["queue", "immediate", "record"] = "queue"
+    done_when: str = ""
     model_config_id: str = Field(default="", max_length=64)
     client_id: str = Field(min_length=1, max_length=100)
     attachment_ids: list[str] = Field(default_factory=list, max_length=5)
+    forward_message_id: str | None = Field(default=None, min_length=1, max_length=80)
+    quote: QuoteInput | None = None
+    also_channel: bool = False
 
 
 class ChannelInput(Strict):
     name: str = Field(min_length=1, max_length=100)
+
+
+class DecisionInput(Strict):
+    status: Literal["accepted", "changes_requested"]
+    feedback: str = ""
 
 
 class DeliveryInput(Strict):
@@ -39,6 +54,11 @@ class ReadInput(Strict):
     thread_id: str | None = Field(default=None, max_length=80)
 
 
+class ActivityReadInput(Strict):
+    through: str = Field(max_length=40)
+    message_id: str | None = Field(default=None, max_length=80)
+
+
 class AgentDocumentInput(Strict):
     source: str = Field(default="", max_length=150000)
     config: members.MemberConfig | None = None
@@ -49,6 +69,9 @@ class AgentDocumentInput(Strict):
 
 def install_team_routes(app, settings, db, auth, workspace_of):
     base = "/api/v1/research/workspaces/{id}/team"
+    from .team_message_marks import install_mark_routes
+
+    install_mark_routes(app, base, db, auth, workspace_of)
 
     @app.put(base + "/budget")
     def save_budget(id: str, body: TeamBudget, a=Depends(auth), d=Depends(db)):
@@ -66,6 +89,33 @@ def install_team_routes(app, settings, db, auth, workspace_of):
             return team.channel_of(d, workspace, identifier)
         except ValueError as error:
             raise HTTPException(404, str(error)) from None
+
+    def thread_activity(d, workspace_id):
+        root = func.coalesce(TeamMessage.thread_id, TeamMessage.id)
+        activity = dict(
+            d.execute(
+                select(root, func.max(TeamMessage.created_at))
+                .where(TeamMessage.workspace_id == workspace_id)
+                .group_by(root)
+            ).all()
+        )
+        # Legacy research replies live in events and sprints as well as team messages.
+        for model, stamp in (
+            (team.ResearchEvent, team.ResearchEvent.created_at),
+            (team.ResearchSprint, team.ResearchSprint.updated_at),
+        ):
+            query = (
+                select(model.project_id, func.max(stamp))
+                .join(team.ResearchProject)
+                .where(team.ResearchProject.workspace_id == workspace_id)
+                .group_by(model.project_id)
+            )
+            if model is team.ResearchEvent:
+                query = query.where(model.action == "message")
+            for project_id, at in d.execute(query):
+                root = f"research:{project_id}"
+                activity[root] = max(activity.get(root, ""), at)
+        return activity
 
     def delivery_out(d, row):
         message = d.get(TeamMessage, row.message_id)
@@ -92,6 +142,26 @@ def install_team_routes(app, settings, db, auth, workspace_of):
         if workspace.archived:
             raise HTTPException(409, "团队已归档 / Team archived")
         return workspace
+
+    @app.post(base + "/channels/{channel_id}/messages/{message_id}/reminders")
+    def remind(
+        id: str,
+        channel_id: str,
+        message_id: str,
+        body: ReminderInput,
+        a=Depends(auth),
+        d=Depends(db),
+    ):
+        from .team_reminders import create
+
+        workspace = editable_workspace(d, id, a)
+        channel = channel_of(d, workspace, channel_id)
+        try:
+            result = create(d, workspace, channel, message_id, body.remind_at)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+        d.commit()
+        return result
 
     def validate_config(workspace, config):
         if config and config.model_config_id:
@@ -231,6 +301,31 @@ def install_team_routes(app, settings, db, auth, workspace_of):
         d.commit()
         return {"ok": True}
 
+    @app.get(base + "/members/{member_id}/avatar")
+    def member_avatar(id: str, member_id: str, a=Depends(auth), d=Depends(db)):
+        from fastapi.responses import FileResponse
+        from . import agent_files as files
+
+        workspace = workspace_of(d, id, a)
+        try:
+            member = members.owned(d, workspace, member_id)
+            path = files.avatar_path(
+                files.member_root(settings, member), members.config(member)["avatar"]
+            )
+            if path is None or not path.is_file():
+                raise ValueError("头像不存在 / Avatar not found")
+        except (OSError, ValueError) as error:
+            raise HTTPException(404, str(error)) from None
+        return FileResponse(
+            path,
+            media_type=files.AVATAR_TYPES[path.suffix.lower()],
+            headers={
+                "Cache-Control": "private, no-cache",
+                "X-Content-Type-Options": "nosniff",
+                "Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'",
+            },
+        )
+
     @app.get(base + "/members/{member_id}")
     def member_detail(id: str, member_id: str, a=Depends(auth), d=Depends(db)):
         workspace = workspace_of(d, id, a)
@@ -248,10 +343,17 @@ def install_team_routes(app, settings, db, auth, workspace_of):
                 .order_by(TeamMessage.created_at.desc())
             )
         )
+        roots = set(
+            d.scalars(
+                select(TeamMessage.thread_id).where(
+                    TeamMessage.workspace_id == id, TeamMessage.thread_id.is_not(None)
+                )
+            )
+        )
         seen, threads = set(), []
         for message in rows:
             thread = message.thread_id or message.id
-            if (message.channel_id, thread) in seen:
+            if thread not in roots or (message.channel_id, thread) in seen:
                 continue
             seen.add((message.channel_id, thread))
             # A thread is named by the message that started it.
@@ -269,7 +371,12 @@ def install_team_routes(app, settings, db, auth, workspace_of):
                 if t and t.strip()
             )
             threads.append(
-                {"id": thread, "channel_id": message.channel_id, "text": text[:200]}
+                {
+                    "id": thread,
+                    "channel_id": message.channel_id,
+                    "text": text[:200],
+                    "last_message_at": root.created_at,
+                }
             )
         from .models import ResearchProject, ResearchSprint
         from .research_team import research_context
@@ -294,12 +401,25 @@ def install_team_routes(app, settings, db, auth, workspace_of):
                     "id": info["thread_id"],
                     "channel_id": info["channel_id"],
                     "text": sprint.summary[:200] or run.prompt[:200],
+                    "last_message_at": sprint.created_at,
                 }
             )
+        activity = thread_activity(d, id)
+        for thread in threads:
+            thread["last_message_at"] = max(
+                thread["last_message_at"], activity.get(thread["id"], "")
+            )
+        threads.sort(key=lambda t: (t["last_message_at"], t["id"]), reverse=True)
         out["threads"] = threads[:50]
         run = team.active_run(d, member)
         # What the member is working on now; nothing while idle.
         out["activity"] = run.prompt[:500] if run else ""
+        from .team_presence import recent_files
+
+        out["recent_files"] = recent_files(d, member)
+        out["attention"] = team.work_overview(d, workspace)["attention"]["members"].get(
+            member.id
+        )
         d.commit()
         return out
 
@@ -380,6 +500,10 @@ def install_team_routes(app, settings, db, auth, workspace_of):
         d.commit()
         return out
 
+    @app.get(base + "/work")
+    def work_overview(id: str, a=Depends(auth), d=Depends(db)):
+        return team.work_overview(d, workspace_of(d, id, a))
+
     @app.get(base + "/channels/{channel_id}/messages")
     def messages(
         id: str,
@@ -389,14 +513,34 @@ def install_team_routes(app, settings, db, auth, workspace_of):
         d=Depends(db),
     ):
         workspace = workspace_of(d, id, a)
+        read_through = team.now()
         try:
             team.ensure(d, workspace)
             channel = channel_of(d, workspace, channel_id)
             out = team.history(d, workspace, channel, thread_id)
+            out["read_through"] = read_through
         except ValueError as error:
             raise HTTPException(404, str(error)) from None
         d.commit()
         return out
+
+    @app.get(base + "/channels/{channel_id}/summary")
+    def channel_summary(
+        id: str,
+        channel_id: str,
+        since: str | None = None,
+        through: str | None = None,
+        a=Depends(auth),
+        d=Depends(db),
+    ):
+        from .team_catchup import summary
+
+        workspace = workspace_of(d, id, a)
+        channel = channel_of(d, workspace, channel_id)
+        try:
+            return summary(d, workspace, channel, since, through)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
 
     @app.post(base + "/channels/{channel_id}/messages")
     def send(
@@ -415,7 +559,40 @@ def install_team_routes(app, settings, db, auth, workspace_of):
                     team.normalize(body.text).strip(),
                 ):
                     raise ValueError("消息标识已用于其他内容 / Message ID already used")
+                if (
+                    (message.data.get("forward") or {}).get("message_id")
+                    != body.forward_message_id
+                    or (
+                        {k: message.data["quote"][k] for k in ("message_id", "text")}
+                        if message.data.get("quote")
+                        else None
+                    )
+                    != (
+                        {
+                            **body.quote.model_dump(),
+                            "text": team.normalize(body.quote.text).strip(),
+                        }
+                        if body.quote
+                        else None
+                    )
+                    or bool(message.data.get("also_channel")) != body.also_channel
+                    or message.data.get("mode", "queue") != body.mode
+                    or message.data.get("done_when", "")
+                    != team.normalize(body.done_when).strip()
+                ):
+                    raise ValueError("消息标识已用于其他内容 / Message ID already used")
             else:
+                from .team_message_features import reference
+
+                references = {}
+                if body.forward_message_id:
+                    references["forward"] = reference(
+                        d, workspace, body.forward_message_id
+                    )
+                if body.quote:
+                    references["quote"] = reference(
+                        d, workspace, body.quote.message_id, body.quote.text
+                    )
                 if body.model_config_id:
                     if not channel.member_id:
                         raise ValueError("只能在私信选择模型 / Choose model in DM")
@@ -436,7 +613,12 @@ def install_team_routes(app, settings, db, auth, workspace_of):
                     thread_id=body.thread_id,
                     mode=body.mode,
                     source_key=key,
-                    data={"attachments": attached},
+                    data={
+                        "attachments": attached,
+                        "done_when": team.normalize(body.done_when).strip(),
+                        **references,
+                    },
+                    also_channel=body.also_channel,
                 )
                 for row in d.scalars(
                     select(TeamDelivery)
@@ -455,6 +637,67 @@ def install_team_routes(app, settings, db, auth, workspace_of):
             return out
         except ValueError as error:
             raise HTTPException(409, str(error)) from None
+
+    def message_of(d, workspace, message_id):
+        from .team_message_features import source_message
+
+        try:
+            return source_message(d, workspace, message_id)
+        except ValueError as error:
+            raise HTTPException(404, str(error)) from None
+
+    @app.post(base + "/messages/{message_id}/decision")
+    def decide_message(
+        id: str, message_id: str, body: DecisionInput, a=Depends(auth), d=Depends(db)
+    ):
+        from .team_message_decisions import decide
+
+        workspace = editable_workspace(d, id, a)
+        message = message_of(d, workspace, message_id)
+        try:
+            result = decide(d, workspace, message, body.status, body.feedback)
+            for row in d.scalars(
+                select(TeamDelivery)
+                .join(TeamMember)
+                .where(
+                    TeamMember.workspace_id == workspace.id,
+                    TeamDelivery.status == "queued",
+                )
+            ):
+                if row.message_id == result.id or result.id in row.action.get(
+                    "merged_messages", []
+                ):
+                    team.dispatch(settings, d, workspace, row)
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from None
+        out = team.message_out(d, message)
+        d.commit()
+        return out
+
+    @app.put(base + "/messages/{message_id}/reactions/{emoji}")
+    def add_reaction(
+        id: str, message_id: str, emoji: str, a=Depends(auth), d=Depends(db)
+    ):
+        return change_reaction(d, id, a, message_id, emoji)
+
+    @app.delete(base + "/messages/{message_id}/reactions/{emoji}")
+    def remove_reaction(
+        id: str, message_id: str, emoji: str, a=Depends(auth), d=Depends(db)
+    ):
+        return change_reaction(d, id, a, message_id, emoji, remove=True)
+
+    def change_reaction(d, id, a, message_id, emoji, *, remove=False):
+        from .team_message_features import react
+
+        workspace = workspace_of(d, id, a)
+        team.ensure(d, workspace)
+        message = message_of(d, workspace, message_id)
+        try:
+            out = react(d, workspace, message, emoji, remove=remove)
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from None
+        d.commit()
+        return out
 
     @app.post(base + "/channels")
     def create_channel(id: str, body: ChannelInput, a=Depends(auth), d=Depends(db)):
@@ -560,7 +803,7 @@ def install_team_routes(app, settings, db, auth, workspace_of):
                 workspace,
                 channel,
                 f"@{message.author_id} {instruction}",
-                thread_id=message.thread_id or message.id,
+                thread_id=message.thread_id,
                 source_key=key,
             )
             for delivery in d.scalars(
@@ -569,6 +812,57 @@ def install_team_routes(app, settings, db, auth, workspace_of):
                 team.dispatch(settings, d, workspace, delivery)
         d.commit()
         return team.message_out(d, incoming)
+
+    def changed_message(d, workspace, message_id):
+        message = d.get(TeamMessage, message_id)
+        if not message or message.workspace_id != workspace.id:
+            raise HTTPException(404, "Not found")
+        if not message.data.get("commit"):
+            raise HTTPException(409, "没有可用提交 / No commit")
+        run = (
+            d.get(AgentRun, message.data["run_id"])
+            if message.data.get("run_id")
+            else None
+        )
+        if run and (run.runtime or {}).get("team_base") == message.data["commit"]:
+            raise HTTPException(409, "没有可用提交 / No commit")
+        return message
+
+    @app.get(base + "/messages/{message_id}/diff")
+    def message_diff(
+        id: str, message_id: str, path: str, a=Depends(auth), d=Depends(db)
+    ):
+        from . import research_repo, team_workspace
+
+        workspace = workspace_of(d, id, a)
+        message = changed_message(d, workspace, message_id)
+        try:
+            return team_workspace.file_diff(
+                research_repo.repo_dir(settings, workspace.id),
+                message.data["commit"],
+                path,
+            )
+        except FileNotFoundError as error:
+            raise HTTPException(404, str(error)) from None
+        except (ValueError, research_repo.GitError) as error:
+            raise HTTPException(409, str(error)) from None
+
+    @app.post(base + "/messages/{message_id}/revert")
+    def revert_message(id: str, message_id: str, a=Depends(auth), d=Depends(db)):
+        from . import research_repo, team_workspace
+        from .models import User
+
+        workspace = workspace_of(d, id, a)
+        message = changed_message(d, workspace, message_id)
+        try:
+            team_workspace.revert(settings, d, workspace, message, d.get(User, a["id"]))
+        except team_workspace.RevertConflict as error:
+            raise HTTPException(
+                409, {"message": str(error), "conflicts": error.conflicts}
+            ) from None
+        except (ValueError, research_repo.GitError) as error:
+            raise HTTPException(409, str(error)) from None
+        return team.message_out(d, message)
 
     @app.get(base + "/file")
     def read_team_file(
@@ -645,16 +939,46 @@ def install_team_routes(app, settings, db, auth, workspace_of):
         workspace = workspace_of(d, id, a)
         channel = channel_of(d, workspace, channel_id)
         team.root_of(d, workspace, channel, body.thread_id)
-        through = min(body.through, team.now())
+        from .team_catchup import timestamp
+
+        try:
+            through = min(timestamp(body.through), team.now())
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
         for message in d.scalars(
             select(TeamMessage).where(
                 TeamMessage.channel_id == channel.id,
                 TeamMessage.thread_id == body.thread_id,
-                TeamMessage.created_at <= through,
+                TeamMessage.kind != "reminder",
             )
         ):
-            message.data = {**message.data, "read": True}
-        channel.read_at = max(channel.read_at, through)
+            # Compared as instants: stored and sent stamps may end in Z or +00:00.
+            if timestamp(message.created_at) <= through:
+                message.data = {**message.data, "read": True}
+        if body.thread_id is None:
+            channel.read_at = max(channel.read_at, through)
+        d.commit()
+        return {"ok": True}
+
+    @app.get(base + "/activity")
+    def activity(id: str, a=Depends(auth), d=Depends(db)):
+        workspace = workspace_of(d, id, a)
+        team.ensure(d, workspace)
+        out = team.activity(d, workspace)
+        d.commit()
+        return out
+
+    @app.post(base + "/activity/read")
+    def read_activity(id: str, body: ActivityReadInput, a=Depends(auth), d=Depends(db)):
+        workspace = workspace_of(d, id, a)
+        team.ensure(d, workspace)
+        through = min(body.through, team.now())
+        for event in team.activity(d, workspace):
+            if event["created_at"] <= through and (
+                body.message_id is None or event["id"] == body.message_id
+            ):
+                message = d.get(TeamMessage, event["id"])
+                message.data = {**message.data, "read": True}
         d.commit()
         return {"ok": True}
 
@@ -666,15 +990,19 @@ def install_team_routes(app, settings, db, auth, workspace_of):
         rows = list(
             d.scalars(
                 select(TeamMessage)
-                .where(TeamMessage.workspace_id == id)
+                .where(TeamMessage.workspace_id == id, TeamMessage.kind != "reminder")
                 .order_by(TeamMessage.created_at)
             )
         )
         if mentions:
             out = [team.message_out(d, m) for m in rows if human in m.mentions]
+            out = [m for m in out if team.has_message_content(m)]
         else:
+            # A thread whose replies all said nothing is not listed.
             roots = {
-                m.thread_id or m.id for m in rows if m.author_id == human or m.thread_id
+                m.thread_id
+                for m in rows
+                if m.thread_id and team.has_message_content(team.message_out(d, m))
             }
             out = [
                 team.message_out(d, m)
@@ -694,5 +1022,81 @@ def install_team_routes(app, settings, db, auth, workspace_of):
                     )
                 )
             ]
+        if not mentions:
+            activity = thread_activity(d, id)
+            channels = {
+                c.id: c
+                for c in d.scalars(
+                    select(TeamChannel).where(TeamChannel.workspace_id == id)
+                )
+            }
+            grouped = {}
+            for row in rows:
+                value = team.message_out(d, row)
+                if row.data.get("research_forwarded") or not team.has_message_content(
+                    value
+                ):
+                    continue
+                grouped.setdefault(
+                    (row.channel_id, row.thread_id or row.id), []
+                ).append(value)
+            legacy_participants = {}
+            role_members = {m.role: m.id for m in members}
+            for model, role in (
+                (team.ResearchEvent, team.ResearchEvent.actor),
+                (team.ResearchSprint, team.ResearchSprint.role),
+            ):
+                query = (
+                    select(model.project_id, role)
+                    .join(team.ResearchProject)
+                    .where(team.ResearchProject.workspace_id == id)
+                    .order_by(model.created_at.desc())
+                )
+                if model is team.ResearchEvent:
+                    query = query.where(model.action == "message")
+                for project_id, author_role in d.execute(query):
+                    author_role = {
+                        "scoping": "advisor",
+                        "discussion": "advisor",
+                        "workflow": "executor",
+                        "review": "advisor",
+                    }.get(author_role, author_role)
+                    if author_role in role_members:
+                        legacy_participants.setdefault(
+                            f"research:{project_id}", []
+                        ).append(role_members[author_role])
+            for message in out:
+                channel = channels[message["channel_id"]]
+                messages = grouped.get((channel.id, message["id"]), [])
+                message["channel"] = team.conversation_out(channel)
+                message["preview"] = team.preview_text(
+                    message["data"].get("title") or message["text"]
+                )
+                message["participant_ids"] = list(
+                    dict.fromkeys(
+                        m["author_id"] for m in reversed(messages) if m["author_id"]
+                    )
+                )
+                message["unread"] = sum(
+                    m["author_id"] != human and not m["data"].get("read")
+                    for m in messages
+                )
+                if message["kind"] == "research":
+                    message["author_id"] = human
+                    message["participant_ids"] = list(
+                        dict.fromkeys(
+                            [
+                                *message["participant_ids"],
+                                *legacy_participants.get(message["id"], []),
+                                human,
+                            ]
+                        )
+                    )
+                else:
+                    message["replies"] = sum(m["id"] != message["id"] for m in messages)
+                message["last_message_at"] = max(
+                    message["created_at"], activity.get(message["id"], "")
+                )
+            out.sort(key=lambda m: (m["last_message_at"], m["id"]), reverse=True)
         d.commit()
         return out

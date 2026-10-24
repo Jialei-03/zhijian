@@ -19,9 +19,9 @@
   font: var(--ui-text-14) / var(--ui-leading) var(--ui-font-sans);
   padding: 0;
   border: 0;
-  border-radius: var(--ui-r-16);
+  border-radius: var(--ui-r-24);
   background: var(--ui-elev);
-  box-shadow: var(--ui-elev-2);
+  box-shadow: var(--ui-elev-3);
   color: var(--ui-fg);
   /* Out: quick, and the way it comes in, backwards. */
   opacity: 0;
@@ -64,7 +64,7 @@
 
 /* The dialog itself holds the focus when there is nothing in it to take it: it keeps its shadow, not the ring. */
 .dialog:focus-visible {
-  box-shadow: var(--ui-elev-2);
+  box-shadow: var(--ui-elev-3);
 }
 
 .dialog::backdrop {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MoreHorizontal, Plus } from "lucide-react";
+import { ArrowLeft, MessageSquare, MoreHorizontal, Plus } from "lucide-react";
 import { useI18n } from "../../i18n/I18nProvider";
 import { Button, Dialog, IconButton, Menu, TextField } from "../../ui";
 import {
@@ -21,9 +21,14 @@ import {
 import { readModels, type ModelRow } from "../setup/model-api";
 import { readResearchSettings } from "../research/research-api";
 import { useResearchNavigation } from "../research/ResearchNavigation";
+import { MemberStatus } from "../research/TeamNavigation";
 import { Prose } from "../research/talk/ThreadView";
 import { MemberAvatar, MemberEditor } from "./MemberEditor";
-import { memberDraft, memberName } from "./member-model";
+import { MemberPause } from "./MemberPause";
+import { memberAvatarSeed, memberDraft, memberName } from "./member-model";
+import { threadDate } from "../research/team-model";
+import { AttentionLine } from "../research/TeamWork";
+import teamStyles from "../research/Team.module.css";
 import styles from "./Members.module.css";
 
 export function Members({
@@ -35,7 +40,7 @@ export function Members({
   selected?: string;
   go(hash: string): void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { connections } = useResearchNavigation();
   const [library, setLibrary] = useState<LibraryMember[]>([]);
   const [models, setModels] = useState<ModelRow[]>([]);
@@ -49,7 +54,7 @@ export function Members({
   const [error, setError] = useState("");
   const [confirm, setConfirm] = useState<{
     member: TeamMember;
-    remove: boolean;
+    action: "delete" | "disable" | "restore";
   } | null>(null);
   const [pending, setPending] = useState<{
     config: MemberConfig;
@@ -82,12 +87,19 @@ export function Members({
     setDetail(null);
     if (!selected) return;
     let stale = false;
-    readMember(team.workspace_id, selected).then(
-      (value) => !stale && setDetail(value),
-      (reason) => !stale && setError(String(reason)),
-    );
+    let request = 0;
+    const load = () => {
+      const current = ++request;
+      readMember(team.workspace_id, selected).then(
+        (value) => !stale && current === request && setDetail(value),
+        (reason) => !stale && current === request && setError(String(reason)),
+      );
+    };
+    load();
+    const timer = window.setInterval(load, 5000);
     return () => {
       stale = true;
+      window.clearInterval(timer);
     };
   }, [
     selected,
@@ -95,6 +107,7 @@ export function Members({
     listed?.status,
     listed?.tokens,
     listed?.revision,
+    listed?.paused,
   ]);
   const availableMachines = [
     ...new Map([...machines, ...connections].map((m) => [m.id, m])).values(),
@@ -134,46 +147,54 @@ export function Members({
       {member ? (
         <>
           {member.file_error && <p role="alert">{member.file_error}</p>}
-          <div className={styles.toolbar}>
-            <Button
-              variant="ghost"
+          <div className={styles.detailHeader}>
+            <IconButton
+              icon={ArrowLeft}
+              label={t("common.back")}
               onClick={() => go(settingsHash(team.workspace_id, "members"))}
-            >
-              {t("team.members")}
-            </Button>
-            <Button
-              onClick={() => {
-                const dm = team.channels.find((c) => c.member_id === member.id);
-                if (dm) go(teamHash(team.workspace_id, dm.id));
-              }}
-              disabled={member.role === "human"}
-            >
-              {t("members.message")}
-            </Button>
-            {member.role !== "human" && (
-              <Button onClick={() => setEditing({ member })}>
-                {t("members.edit")}
-              </Button>
-            )}
-          </div>
-          <div className={styles.identity}>
-            <MemberAvatar
-              name={memberName(member, t)}
-              color={member.avatar_color}
             />
-            <h2>{memberName(member, t)}</h2>
-            <span>
-              {t(
-                member.enabled === false
-                  ? "members.disabled"
-                  : `team.status.${member.status}`,
+            <div className={styles.identity}>
+              <MemberAvatar member={member} />
+              <h2>{memberName(member, t)}</h2>
+              <span>
+                {t(
+                  member.enabled === false
+                    ? "members.disabled"
+                    : member.paused
+                      ? "team.status.paused"
+                      : `team.status.${member.status}`,
+                )}
+              </span>
+            </div>
+            <div className={styles.toolbar}>
+              <Button
+                onClick={() => {
+                  const dm = team.channels.find(
+                    (c) => c.member_id === member.id,
+                  );
+                  if (dm) go(teamHash(team.workspace_id, dm.id));
+                }}
+                disabled={member.role === "human"}
+              >
+                {t("members.message")}
+              </Button>
+              {member.role !== "human" && (
+                <MemberPause workspace={team.workspace_id} member={member} />
               )}
-            </span>
+              {member.role !== "human" && (
+                <Button onClick={() => setEditing({ member })}>
+                  {t("members.edit")}
+                </Button>
+              )}
+            </div>
           </div>
           <dl className={styles.stats}>
             <dt>{t("members.spent")}</dt>
             <dd>{(member.tokens ?? 0).toLocaleString()} token</dd>
           </dl>
+          {detail && detail.id === selected && detail.attention && (
+            <AttentionLine value={detail.attention} />
+          )}
           {detail?.activity && (
             <>
               <h3>{t("members.activity")}</h3>
@@ -181,18 +202,16 @@ export function Members({
             </>
           )}
           <h3>{t("members.description")}</h3>
-          <Prose text={member.role_description ?? ""} />
+          <div className={styles.roleDescription}>
+            <Prose text={member.role_description ?? ""} />
+          </div>
           {member.builtin && member.role !== "human" && (
-            <Button
-              onClick={() =>
-                void action(() =>
-                  editTeamMember(team.workspace_id, member.id, {
-                    restore_builtin: true,
-                  }),
-                )
-              }
-            >
-              {t("members.restoreBuiltin")}
+            <Button onClick={() => setConfirm({ member, action: "restore" })}>
+              {t(
+                member.builtin_update_available
+                  ? "members.updateBuiltin"
+                  : "members.restoreBuiltin",
+              )}
             </Button>
           )}
           {member.library_id && (
@@ -245,19 +264,24 @@ export function Members({
               ))}
           </div>
           <h3>{t("members.threads")}</h3>
-          <ul className={styles.list}>
+          <ul className={styles.list} aria-label={t("members.threads")}>
             {detail?.threads.map((thread) => (
               <li key={`${thread.channel_id}:${thread.id}`}>
-                <Button
-                  variant="ghost"
+                <button
+                  type="button"
+                  className={teamStyles.threadRow}
                   onClick={() =>
                     go(
                       teamHash(team.workspace_id, thread.channel_id, thread.id),
                     )
                   }
                 >
-                  {thread.text || thread.id}
-                </Button>
+                  <MessageSquare aria-hidden />
+                  <span>{thread.text || thread.id}</span>
+                  <time dateTime={thread.last_message_at}>
+                    {threadDate(thread.last_message_at, locale)}
+                  </time>
+                </button>
               </li>
             ))}
           </ul>
@@ -293,10 +317,7 @@ export function Members({
               )
               .map((m) => (
                 <li key={m.id}>
-                  <MemberAvatar
-                    name={memberName(m, t)}
-                    color={m.avatar_color}
-                  />
+                  <MemberAvatar member={m} />
                   <Button
                     variant="ghost"
                     onClick={() =>
@@ -307,15 +328,17 @@ export function Members({
                   </Button>
                   <span className={styles.summary}>{m.description ?? ""}</span>
                   <span className={styles.meta}>
-                    <span
-                      className={styles.statusDot}
-                      data-status={m.enabled === false ? "disabled" : m.status}
-                      aria-hidden="true"
+                    <MemberStatus
+                      status={m.status}
+                      enabled={m.enabled}
+                      paused={m.paused}
                     />
                     {t(
                       m.enabled === false
                         ? "members.disabled"
-                        : `team.status.${m.status}`,
+                        : m.paused
+                          ? "team.status.paused"
+                          : `team.status.${m.status}`,
                     )}
                   </span>
                   {m.role !== "human" && (
@@ -358,7 +381,7 @@ export function Members({
                                     enabled: true,
                                   }),
                                 )
-                              : setConfirm({ member: m, remove: false }),
+                              : setConfirm({ member: m, action: "disable" }),
                         },
                         ...(!m.builtin
                           ? [
@@ -367,7 +390,7 @@ export function Members({
                                 label: t("members.delete"),
                                 danger: true,
                                 onSelect: () =>
-                                  setConfirm({ member: m, remove: true }),
+                                  setConfirm({ member: m, action: "delete" }),
                               },
                             ]
                           : []),
@@ -391,6 +414,11 @@ export function Members({
           }
           initialSource={editing.library?.source ?? editing.member?.source}
           initialSubscriptions={editing.member?.subscriptions}
+          initialAvatarSeed={
+            editing.member ? memberAvatarSeed(editing.member) : undefined
+          }
+          initialAvatarUrl={editing.member?.avatar_url ?? undefined}
+          allowUpload={!editing.library}
           role={editing.library ? "custom" : editing.member?.role}
           builtin={!!editing.member?.builtin && !editing.library}
           creating={!editing.member}
@@ -399,7 +427,7 @@ export function Members({
           models={models}
           machines={availableMachines}
           onClose={() => setEditing(null)}
-          onSave={async (config, subscriptions, source, document) => {
+          onSave={async (config, subscriptions, source, document, upload) => {
             if (editing.library) {
               setPending({ config, source: document });
               return;
@@ -410,6 +438,7 @@ export function Members({
                 source: document,
                 subscriptions,
                 revision: editing.member.revision,
+                avatar_upload: upload,
               });
             else
               await addTeamMember(
@@ -420,6 +449,7 @@ export function Members({
                       config,
                       source: document,
                       subscriptions,
+                      avatar_upload: upload,
                       ...(source.startsWith("m:")
                         ? { copy_from: source.slice(2) }
                         : {}),
@@ -433,7 +463,11 @@ export function Members({
       <Dialog
         open={!!confirm}
         title={t(
-          confirm?.remove ? "members.confirmDelete" : "members.confirmDisable",
+          confirm?.action === "restore"
+            ? "members.confirmRestoreBuiltin"
+            : confirm?.action === "delete"
+              ? "members.confirmDelete"
+              : "members.confirmDisable",
         )}
         onClose={() => setConfirm(null)}
         footer={
@@ -446,7 +480,7 @@ export function Members({
               onClick={() => {
                 if (confirm)
                   void action(async () => {
-                    if (confirm.remove)
+                    if (confirm.action === "delete")
                       await deleteTeamMember(
                         team.workspace_id,
                         confirm.member.id,
@@ -455,13 +489,26 @@ export function Members({
                       await editTeamMember(
                         team.workspace_id,
                         confirm.member.id,
-                        { enabled: false },
+                        confirm.action === "restore"
+                          ? {
+                              restore_builtin: true,
+                              revision: confirm.member.revision,
+                            }
+                          : { enabled: false },
                       );
                     setConfirm(null);
                   });
               }}
             >
-              {t(confirm?.remove ? "members.delete" : "members.disable")}
+              {t(
+                confirm?.action === "restore"
+                  ? confirm.member.builtin_update_available
+                    ? "members.updateBuiltin"
+                    : "members.restoreBuiltin"
+                  : confirm?.action === "delete"
+                    ? "members.delete"
+                    : "members.disable",
+              )}
             </Button>
           </>
         }

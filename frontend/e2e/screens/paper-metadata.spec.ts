@@ -137,9 +137,8 @@ test("the library shows sources, sorts by citations and exports a .bib", async (
   await library.getByRole("searchbox", { name: "搜索文库" }).fill(stamp);
   const card = (id: string) => library.locator(`[data-paper="${id}"]`);
   await expect(card(few.paperId)).toContainText("Nature");
-  await expect(card(many.paperId)).toContainText(
-    "Advances in Neural Information Processing Systems",
-  );
+  // Known venues show their short name.
+  await expect(card(many.paperId)).toContainText("NeurIPS");
   await expect(card(none.paperId)).not.toContainText("被引");
 
   await library.getByRole("button", { name: /^排序/ }).click();

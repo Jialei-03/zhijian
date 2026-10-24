@@ -4,7 +4,6 @@ import {
   Folder,
   FolderPlus,
   Plus,
-  Bell,
 } from "lucide-react";
 import {
   createContext,
@@ -19,7 +18,7 @@ import { useI18n } from "../../i18n/I18nProvider";
 import { useLocal } from "../../app/edition";
 import { AppActions } from "../../app/AppSidebar";
 import { followLink } from "../../reader/route";
-import { Button, Floating, IconButton, Spinner } from "../../ui";
+import { Button, IconButton, Spinner } from "../../ui";
 import {
   readNavigation,
   readConnections,
@@ -36,7 +35,11 @@ import { researchStatus } from "./navigation-status";
 import { threadTree } from "./thread-tree";
 import type { NavigationResearch } from "./navigation-api";
 import styles from "./Workspace.module.css";
-import { getTeam, TEAM_EVENT, teamHash, type TeamMessage } from "./team-api";
+import { getTeam, TEAM_EVENT } from "./team-api";
+import { needsYou, type AttentionMessage } from "./navigation-attention";
+import { sidebarId } from "../../app/sidebar-entries";
+import nav from "./TeamNavigation.module.css";
+import { notifyTeamReminders } from "./team-reminder-notifications";
 
 const EMPTY: Navigation = { workspaces: [], collections: [] };
 const Context = createContext({
@@ -55,6 +58,7 @@ export function ResearchNavigationProvider({
   children: ReactNode;
 }) {
   const local = useLocal();
+  const { t } = useI18n();
   const [data, setData] = useState<Navigation>(EMPTY);
   const [connections, setConnections] = useState<SSHConnection[]>([]);
   const [ready, setReady] = useState(false);
@@ -98,6 +102,32 @@ export function ResearchNavigationProvider({
       window.removeEventListener("focus", refresh);
     };
   }, [local, reload]);
+  useEffect(() => {
+    if (local !== true || !window.oraDesktop) return;
+    let stale = false;
+    const load = () =>
+      Promise.allSettled(
+        data.workspaces
+          .filter((w) => !w.archived)
+          .map(async (w) => {
+            const team = await getTeam(w.id);
+            if (!stale)
+              notifyTeamReminders(
+                w.id,
+                team.notifications,
+                t("team.reminder.title"),
+              );
+          }),
+      );
+    void load();
+    const timer = window.setInterval(load, 5000);
+    window.addEventListener(TEAM_EVENT, load);
+    return () => {
+      stale = true;
+      clearInterval(timer);
+      window.removeEventListener(TEAM_EVENT, load);
+    };
+  }, [local, data.workspaces, t]);
   return (
     <Context.Provider
       value={{ data, connections, ready, loading, error, reload }}
@@ -133,13 +163,10 @@ export function ResearchState({ research }: { research: NavigationResearch }) {
   return null;
 }
 
-export function ResearchNotifications({ go }: { go(hash: string): void }) {
+export function ResearchAttention({ go }: { go(hash: string): void }) {
   const { t } = useI18n();
   const { data } = useResearchNavigation();
-  const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState<
-    (TeamMessage & { workspace_id: string })[]
-  >([]);
+  const [messages, setMessages] = useState<AttentionMessage[]>([]);
   useEffect(() => {
     let stale = false;
     const load = () =>
@@ -166,79 +193,31 @@ export function ResearchNotifications({ go }: { go(hash: string): void }) {
       window.removeEventListener(TEAM_EVENT, load);
     };
   }, [data.workspaces]);
-  const anchor = useRef<HTMLButtonElement>(null);
-  const rows = data.workspaces
-    .filter((w) => !w.archived)
-    .flatMap((w) => w.researches)
-    .filter(
-      (r) =>
-        !r.archived_at &&
-        (researchStatus(r) === "research.status.waiting" || r.unread),
-    );
+  const items = needsYou(data, messages);
+  if (!items.length) return null;
   return (
-    <>
-      <span className={styles.notificationAnchor}>
-        <IconButton
-          ref={anchor}
-          icon={Bell}
-          label={t("research.notifications")}
-          size="sm"
-          aria-expanded={open}
-          onClick={() => setOpen(!open)}
-        />
-        {(!!rows.length || !!messages.length) && (
-          <i className={styles.bellDot} />
-        )}
-      </span>
-      <Floating
-        open={open}
-        anchor={anchor.current}
-        ignore={anchor.current}
-        placement={{ side: "bottom", align: "end" }}
-        onDismiss={() => setOpen(false)}
-        className={styles.notifications}
-      >
-        <div role="dialog" aria-label={t("research.notifications")}>
-          <h3>{t("research.notifications")}</h3>
-          {messages.map((message) => (
-            <button
-              key={message.id}
-              onClick={() => {
-                go(
-                  teamHash(
-                    message.workspace_id,
-                    message.channel_id,
-                    message.thread_id || message.id,
-                  ),
-                );
-                setOpen(false);
-              }}
-            >
-              <span>{message.text}</span>
-            </button>
-          ))}
-          {rows.map((r) => (
-            <button
-              key={r.id}
-              onClick={() => {
-                go(teamHash(r.workspace_id, "", `research:${r.id}`));
-                setOpen(false);
-              }}
-            >
-              <ResearchState research={r} />
-              <span>{r.title || r.question}</span>
-              <small>{t(researchStatus(r))}</small>
-            </button>
-          ))}
-          {!rows.length && !messages.length && (
-            <div className={styles.notificationEmpty}>
-              <Bell size={24} aria-hidden />
-              <span>{t("research.notifications.empty")}</span>
-            </div>
-          )}
-        </div>
-      </Floating>
-    </>
+    <section
+      className={nav.attention}
+      data-sidebar-place="attention"
+      data-id={sidebarId("attention")}
+      aria-label={t("sidebar.needsYou")}
+    >
+      <div className={nav.heading}>{t("sidebar.needsYou")}</div>
+      <div className={nav.attentionList}>
+        {items.map((item) => (
+          <a
+            key={item.id}
+            className={nav.attentionRow}
+            data-id={sidebarId("attention-item")}
+            href={`#${item.hash}`}
+            onClick={followLink(go, item.hash)}
+          >
+            <span>{item.title}</span>
+            <small>{t("sidebar.waiting")}</small>
+          </a>
+        ))}
+      </div>
+    </section>
   );
 }
 

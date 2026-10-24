@@ -628,11 +628,11 @@ test("without a model the composer says where to add one", async ({ page }) => {
   const main = page
     .locator('[class*="composer"]')
     .filter({ has: questionBox(page) });
-  await expect(main).toContainText("先在设置里添加模型，助手才能回答。");
+  await expect(main).toContainText("未配置模型");
   await expect(questionBox(page)).toBeDisabled();
   await expect(sendButton(page)).toBeDisabled();
   await expect(
-    main.getByRole("link", { name: "去设置", exact: true }),
-  ).toHaveAttribute("href", "#settings");
+    main.getByRole("link", { name: "添加模型", exact: true }),
+  ).toHaveAttribute("href", "#customize/models");
   expect(server.created).toEqual([]);
 });

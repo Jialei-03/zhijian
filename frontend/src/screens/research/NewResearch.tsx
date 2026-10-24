@@ -9,6 +9,7 @@ import { useResearchNavigation } from "./ResearchNavigation";
 import { getTeam, teamHash } from "./team-api";
 import { resumeProject, startProject } from "./research-api";
 import { Composer } from "./talk/Composer";
+import { NewRecent } from "./NewRecent";
 import { WorkflowPicker } from "../workflows/WorkflowPicker";
 import { ModelPicker } from "./talk/Pickers";
 import { WorkspacePicker } from "./WorkspaceDialogs";
@@ -130,6 +131,7 @@ export function NewResearch({
           </p>
         )}
       </div>
+      <NewRecent go={go} />
     </main>
   );
 }
@@ -201,7 +203,6 @@ function FirstMessage({
       },
       (reason: unknown) => {
         if (!cancelled) {
-          setModelKnown(true);
           setError(reason instanceof Error ? reason.message : String(reason));
         }
       },
@@ -262,12 +263,11 @@ function FirstMessage({
       }
       refreshResearchNavigation();
       const team = await getTeam(workspaceId);
+      const channel = team.channels.find((c) => c.key === "experiments");
       go(
-        teamHash(
-          workspaceId,
-          team.channels.find((c) => c.key === "experiments")!.id,
-          `research:${research.id}`,
-        ),
+        channel
+          ? teamHash(workspaceId, channel.id, `research:${research.id}`)
+          : `research/${research.id}`,
       );
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);
@@ -318,10 +318,12 @@ function FirstMessage({
         busy={busy}
         disabled={busy}
         sendDisabled={!workspaceId || !modelId}
+        needsModel={modelKnown && models.length === 0}
         leading={
           <>
             <IconButton
               icon={Plus}
+              className={styles.plus}
               label={t("research.attach")}
               size="sm"
               onClick={() => picker.current?.click()}
@@ -348,11 +350,6 @@ function FirstMessage({
         }
         autoFocus
       />
-      {modelKnown && !modelId && (
-        <Button size="sm" variant="ghost" onClick={() => go("settings/models")}>
-          {t("workspace.configureModel")}
-        </Button>
-      )}
       {error && (
         <p className={styles.error} role="alert">
           {error}

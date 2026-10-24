@@ -83,6 +83,8 @@ function isTextEntry(target: EventTarget | null): boolean {
 }
 
 export interface SidebarProps {
+  "data-sidebar-place"?: string;
+  collapseId?: string;
   /** The accessible name of the navigation. */
   label: string;
   collapsed: boolean;
@@ -118,6 +120,8 @@ export interface SidebarProps {
  * than pushing them.
  */
 export function Sidebar({
+  "data-sidebar-place": place,
+  collapseId,
   label,
   collapsed,
   onCollapsedChange,
@@ -185,6 +189,7 @@ export function Sidebar({
       <div className={clsx(styles.slot, overlay && styles.reserved)}>
         <nav
           ref={nav}
+          data-sidebar-place={place}
           aria-label={label}
           style={
             sized
@@ -200,6 +205,7 @@ export function Sidebar({
           <div className={styles.top}>
             {header && <div className={styles.header}>{header}</div>}
             <IconButton
+              data-id={collapseId}
               icon={collapsed ? PanelLeftOpen : PanelLeftClose}
               label={t(collapsed ? "sidebar.expand" : "sidebar.collapse")}
               shortcut={TOGGLE_SHORTCUT}
@@ -271,7 +277,10 @@ function useTruncated(element: RefObject<HTMLElement | null>, text: string) {
 }
 
 export interface SidebarItemProps {
+  "data-id"?: string;
+  disabled?: boolean;
   icon: LucideIcon;
+  iconContent?: ReactNode;
   /** One line: a longer label is cut with an ellipsis, and shown whole in a tooltip. */
   label: string;
   /** A small note at the end of the row (a count, say). */
@@ -287,7 +296,10 @@ export interface SidebarItemProps {
 }
 
 export function SidebarItem({
+  "data-id": dataId,
+  disabled,
   icon: Icon,
+  iconContent,
   label,
   meta,
   active = false,
@@ -301,7 +313,7 @@ export function SidebarItem({
 
   const content = (
     <>
-      <Icon size={16} aria-hidden="true" />
+      {iconContent ?? <Icon size={16} aria-hidden="true" />}
       <span ref={text} className={styles.label}>
         {label}
       </span>
@@ -310,6 +322,7 @@ export function SidebarItem({
     </>
   );
   const props = {
+    "data-id": dataId,
     className: clsx(styles.item, active && styles.active),
     "aria-current": active ? ("page" as const) : undefined,
     // The label is not drawn while collapsed, so the name is given outright; it is the one the content makes.
@@ -332,7 +345,7 @@ export function SidebarItem({
           {content}
         </a>
       ) : (
-        <button {...props} type="button">
+        <button {...props} type="button" disabled={disabled}>
           {content}
         </button>
       )}

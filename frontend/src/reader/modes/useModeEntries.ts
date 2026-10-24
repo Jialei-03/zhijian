@@ -1,3 +1,4 @@
+import { Check, Plus, RotateCw } from "lucide-react";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { MenuEntry } from "../../ui";
 import type { ReadingMode, TranslationLanguage } from "./mode";
@@ -14,13 +15,6 @@ export interface ModeEntriesArgs {
   /** Where the menu carries the reading modes too (a strip too narrow for the switch): the chosen one, and the way to change it. */
   modes?: { mode: ReadingMode; onChange(mode: ReadingMode): void };
 }
-
-/** A menu item has no checked state: the chosen one says so in its label, and the others keep its room. */
-const CHOSEN = "✓ ";
-const NOT_CHOSEN = "   ";
-
-const mark = (chosen: boolean, label: string) =>
-  (chosen ? CHOSEN : NOT_CHOSEN) + label;
 
 const MODES: ReadingMode[] = ["original", "parallel", "translated"];
 
@@ -48,7 +42,9 @@ export function useModeEntries({
           ...MODES.map(
             (mode): MenuEntry => ({
               id: `mode-${mode}`,
-              label: mark(mode === modes.mode, t(`reader.mode.${mode}`)),
+              label: t(`reader.mode.${mode}`),
+              icon: mode === modes.mode ? Check : undefined,
+              checked: mode === modes.mode,
               onSelect: () => modes.onChange(mode),
             }),
           ),
@@ -57,12 +53,16 @@ export function useModeEntries({
       : []),
     {
       id: "language-zh",
-      label: mark(language === "zh", t("reader.translation.toChinese")),
+      label: t("reader.translation.toChinese"),
+      icon: language === "zh" ? Check : undefined,
+      checked: language === "zh",
       onSelect: () => onLanguage("zh"),
     },
     {
       id: "language-en",
-      label: mark(language === "en", t("reader.translation.toEnglish")),
+      label: t("reader.translation.toEnglish"),
+      icon: language === "en" ? Check : undefined,
+      checked: language === "en",
       onSelect: () => onLanguage("en"),
     },
     { kind: "separator", id: "models" },
@@ -70,7 +70,9 @@ export function useModeEntries({
       ? settings.models.map(
           (model): MenuEntry => ({
             id: `model-${model.id}`,
-            label: mark(model.id === current, model.name || model.model),
+            label: model.name || model.model,
+            icon: model.id === current ? Check : undefined,
+            checked: model.id === current,
             onSelect: () => onModel(model.id),
           }),
         )
@@ -80,8 +82,9 @@ export function useModeEntries({
             {
               id: "add-model",
               label: t("reader.translation.addModel"),
+              icon: Plus,
               onSelect: () => {
-                window.location.hash = "settings";
+                window.location.hash = "customize/models";
               },
             } satisfies MenuEntry,
           ]
@@ -92,6 +95,7 @@ export function useModeEntries({
           {
             id: "retranslate",
             label: t("reader.translation.retranslate"),
+            icon: RotateCw,
             onSelect: onRetranslatePage,
           },
         ] satisfies MenuEntry[])

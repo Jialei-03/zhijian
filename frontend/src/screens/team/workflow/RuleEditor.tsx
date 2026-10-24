@@ -70,6 +70,7 @@ export function RuleEditor({
       <option value="">{t("teamWorkflow.choose")}</option>
       {selected &&
         selected !== "subscribers" &&
+        selected !== "m:$author" &&
         !members.some((member) => `m:${member.id}` === selected) &&
         !roles.some((role) => `r:${role}` === selected) && (
           <option value={selected}>{selected.slice(2)}</option>
@@ -256,7 +257,7 @@ export function RuleEditor({
                           current.then.on_fail ??
                           current.when.from_member ??
                           current.when.from_role,
-                        max_rounds: current.then.max_rounds ?? 3,
+                        max_rounds: current.then.max_rounds,
                       }
                     : {}),
                   ...(action === "post"
@@ -284,6 +285,11 @@ export function RuleEditor({
                 })
               }
             >
+              {["accepted", "changes_requested"].includes(draft.when.event) && (
+                <option value="m:$author">
+                  {t("teamWorkflow.originalAuthor")}
+                </option>
+              )}
               {draft.then.action === "wake" &&
                 draft.when.event === "message" && (
                   <option value="subscribers">
@@ -306,11 +312,11 @@ export function RuleEditor({
               </SelectField>
               <TextField
                 type="number"
-                min={1}
+                min={0}
                 step={1}
-                required
                 label={t("teamWorkflow.rounds")}
-                value={draft.then.max_rounds ?? 3}
+                placeholder={t("team.unlimited")}
+                value={draft.then.max_rounds || ""}
                 onChange={(event) =>
                   then({ max_rounds: Number(event.target.value) })
                 }
@@ -343,11 +349,11 @@ export function RuleEditor({
           />
           <TextField
             type="number"
-            min={1}
+            min={0}
             step={1}
-            required
             label={t("teamWorkflow.limit")}
-            value={draft.limit.per_thread}
+            placeholder={t("team.unlimited")}
+            value={draft.limit?.per_thread || ""}
             onChange={(event) =>
               setDraft({
                 ...draft,

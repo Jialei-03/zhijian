@@ -148,7 +148,7 @@ export function parseAppRoute(hash: string): AppRoute {
     return uuid(workspaceId) &&
       (!channelId ||
         uuid(channelId) ||
-        ["threads", "mentions", "settings"].includes(channelId))
+        ["threads", "mentions", "work", "settings"].includes(channelId))
       ? {
           screen: "team",
           workspaceId,

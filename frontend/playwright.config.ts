@@ -30,10 +30,14 @@ export default defineConfig({
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
   },
-  webServer: {
-    command: "../.venv/bin/python ../scripts/e2e_server.py",
-    url: `http://127.0.0.1:${port}/api/v1/health`,
-    timeout: 30000,
-    reuseExistingServer: false,
-  },
+  // README shots use a real, separately seeded backend.local service.
+  webServer:
+    process.env.README_SHOTS === "1"
+      ? undefined
+      : {
+          command: "../.venv/bin/python ../scripts/e2e_server.py",
+          url: `http://127.0.0.1:${port}/api/v1/health`,
+          timeout: 30000,
+          reuseExistingServer: false,
+        },
 });

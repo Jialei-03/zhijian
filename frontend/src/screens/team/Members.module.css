@@ -20,6 +20,20 @@
   border-radius: var(--ui-r-pill);
   height: var(--ui-control-md);
 }
+.detailHeader {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ui-space-12);
+  margin-bottom: var(--ui-space-24);
+}
+.detailHeader .identity {
+  flex: 1;
+  min-width: 0;
+}
+.detailHeader .toolbar {
+  margin-bottom: 0;
+}
 .search {
   flex: 0 1 var(--ui-search-width);
   width: var(--ui-search-width);
@@ -48,12 +62,14 @@
   text-overflow: ellipsis;
 }
 .meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-space-8);
   margin-left: auto;
   color: var(--ui-fg-2);
   font-size: var(--ui-text-12);
 }
 .avatar {
-  --member-color: steelblue;
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
@@ -61,25 +77,39 @@
   width: var(--ui-control-md);
   height: var(--ui-control-md);
   border-radius: var(--ui-r-pill);
-  background: color-mix(in oklab, var(--member-color) 18%, var(--ui-elev));
-  color: var(--ui-fg);
-  font-size: var(--ui-text-12);
-  font-weight: var(--ui-weight-strong);
+  overflow: hidden;
 }
-.avatar[data-color="green"] {
-  --member-color: var(--ui-success-text);
+.avatar[data-size="sm"] {
+  width: var(--ui-space-24);
+  height: var(--ui-space-24);
 }
-.avatar[data-color="amber"] {
-  --member-color: var(--ui-warning-text);
+.avatar[data-size="lg"] {
+  width: var(--ui-space-48);
+  height: var(--ui-space-48);
 }
-.avatar[data-color="red"] {
-  --member-color: var(--ui-danger-text);
+.avatar > span,
+.avatar svg,
+.avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
-.avatar[data-color="violet"] {
-  --member-color: mediumpurple;
+.avatar img {
+  object-fit: cover;
 }
-.avatar[data-color="slate"] {
-  --member-color: var(--ui-fg-2);
+.avatarEditor {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ui-space-12);
+}
+fieldset.field {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+fieldset.field legend {
+  margin-bottom: var(--ui-space-8);
 }
 .form,
 .fields {
@@ -184,22 +214,11 @@
   color: var(--ui-fg-2);
   font-size: var(--ui-text-13);
 }
-.statusDot {
-  display: inline-block;
-  width: var(--ui-space-6);
-  height: var(--ui-space-6);
-  border-radius: var(--ui-r-pill);
-  margin-inline-end: var(--ui-space-8);
-  background: var(--ui-success-text);
-}
-.statusDot[data-status="working"] {
-  background: var(--ui-accent);
-}
-.statusDot[data-status="waiting"] {
-  background: var(--ui-warning-text);
-}
-.statusDot[data-status="disabled"] {
-  background: var(--ui-fg-3);
+/* Doubled so it outranks the prose headings of the markdown inside: they stay below the member's name. */
+.roleDescription.roleDescription :is(h1, h2, h3) {
+  font-size: var(--ui-text-13);
+  font-weight: var(--ui-weight-strong);
+  margin-block: var(--ui-space-16) var(--ui-space-8);
 }
 @media (max-width: 720px) {
   .editorColumns {

@@ -11,37 +11,12 @@
   -webkit-font-smoothing: antialiased;
 }
 
-/* The local research app uses a continuous window, matching its native rail. */
+/*
+ * The local app is laid out as the Claude desktop app is: the rail and the
+ * sidebar sit on the shell, and what is open floats beside them as a card.
+ */
 :global(html[data-ora-local="true"]) {
-  --ui-bg: #ffffff;
-  --ui-bg-1: #ffffff;
-  --ui-bg-2: #f3f3f3;
-  --ui-bg-3: #e8e8e8;
-  --ui-elev: #f0f0f0;
-  --ui-fg: #202020;
-  --ui-fg-1: #414141;
-  --ui-fg-2: #626262;
-  --ui-fg-3: #747474;
-  --ui-primary: #202020;
-  --ui-primary-fg: #ffffff;
-  --ora-chrome: #e7e7e7;
-  --ui-font-sans:
-    -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
-}
-
-:global(html[data-ora-local="true"][data-theme="dark"]) {
-  --ui-bg: #181818;
-  --ui-bg-1: #181818;
-  --ui-bg-2: #282828;
-  --ui-bg-3: #333333;
-  --ui-elev: #363636;
-  --ui-fg: #ededed;
-  --ui-fg-1: #cecece;
-  --ui-fg-2: #ababab;
-  --ui-fg-3: #929292;
-  --ui-primary: #ffffff;
-  --ui-primary-fg: #202020;
-  --ora-chrome: #343435;
+  --ora-chrome: var(--ui-bg-1);
 }
 
 :global(html[data-ora-local="true"][data-desktop]) {
@@ -54,16 +29,24 @@
 
 .localFrame > :first-child {
   gap: 0;
-  padding: 0;
+  padding: var(--ui-space-8) var(--ui-space-8) var(--ui-space-8) 0;
   background: var(--ora-chrome);
 }
 
 .localFrame > :first-child > :last-child {
   gap: 0;
   min-height: 0;
-  border-radius: 0 var(--ui-r-12) var(--ui-r-12) 0;
+  border-radius: var(--ui-r-16);
   overflow: hidden;
-  background: var(--ui-bg-1);
+  background: var(--ui-bg);
+  box-shadow: var(--ui-elev-1);
+}
+
+.localFrame[data-app-screen="research"] > :first-child > :last-child {
+  border-radius: 0;
+  overflow: visible;
+  background: transparent;
+  box-shadow: none;
 }
 
 :where(.root) :focus-visible {

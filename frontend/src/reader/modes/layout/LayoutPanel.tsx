@@ -152,7 +152,6 @@ function Method({ layout, engine }: { layout: Layout; engine: Engine }) {
         <h3 className={styles.methodName}>{name}</h3>
         {status && <span className={styles.status}>{status}</span>}
       </header>
-      <p className={styles.about}>{t(`reader.engine.${engine}.about`)}</p>
       {body}
     </section>
   );
@@ -187,7 +186,7 @@ export function LayoutPanel({ layout }: { layout: Layout }) {
         {!layout.hasModel && (
           <p className={styles.note}>
             {t("reader.layout.noModel")}{" "}
-            <a className={styles.link} href="#settings">
+            <a className={styles.link} href="#customize/models">
               {t("reader.layout.toSettings")}
             </a>
           </p>
@@ -197,7 +196,6 @@ export function LayoutPanel({ layout }: { layout: Layout }) {
             <Method key={engine} layout={layout} engine={engine} />
           ))}
         </div>
-        <p className={styles.note}>{t("reader.layout.timeNote")}</p>
         {layout.error && (
           <p className={styles.error} role="alert">
             {layout.error}

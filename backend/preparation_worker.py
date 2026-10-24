@@ -68,7 +68,7 @@ def artifact_key(row, file, config, kind, parameters):
 
 
 def save_artifact(
-    settings, maker, row, file, config, kind, parameters, result, pages=None
+    settings, maker, row, file, config, kind, parameters, result, pages=None, *, error=""
 ):
     """Publish one artifact; ``pages`` are the pages it was made from."""
     key = artifact_key(row, file, config, kind, parameters)
@@ -82,6 +82,8 @@ def save_artifact(
                 ReadingArtifact.owner == row.owner, ReadingArtifact.cache_key == key
             )
         )
+        if error and value is not None and value.status == "completed":
+            return
         size = len(json.dumps(result, ensure_ascii=False).encode()) + 2048
         if size > RESULT_LIMIT:
             raise ValueError("阅读结果过长，未发布")
@@ -108,8 +110,10 @@ def save_artifact(
         value.model = config["model"]
         value.model_options = task_options(config, task_of(artifact=kind))
         value.result = result
-        value.status = "completed"
-        value.error = ""
+        value.status = "failed" if error else "completed"
+        value.error = error[:500]
+        if error and kind == "guide":
+            current.guide_status = "failed"
         value.size = size
         value.updated_at = now()
         value.evidence_pages = (
@@ -121,7 +125,8 @@ def save_artifact(
         )
         from .reading_artifacts import drop_older_page_translations
 
-        drop_older_page_translations(d, value)
+        if not error:
+            drop_older_page_translations(d, value)
         d.commit()
 
 
@@ -312,14 +317,27 @@ def process(settings, maker, identifier):
 
         errors = []
         with TaskExecutor() as pool:
-            futures = [pool.submit(page_task, n) for n in texts if n not in done] + [
-                pool.submit(guide_task)
-            ]
-            for future in futures:
+            futures = [
+                (
+                    pool.submit(page_task, n),
+                    "page_translation",
+                    {"page": n, "language": "zh"},
+                )
+                for n in texts
+                if n not in done
+            ] + [(pool.submit(guide_task), "guide", {})]
+            for future, kind, parameters in futures:
                 try:
                     future.result()
                 except Exception as error:  # noqa: BLE001 — persist provider and parsing failures so the worker survives
-                    errors.append(error)
+                    reason = str(error) or "阅读准备失败"
+                    errors.append(reason)
+                    # The reader consumes each feature's own result/error, never
+                    # the preparation's aggregate (which also includes layout).
+                    save_artifact(
+                        settings, maker, row, file, config, kind, parameters, {},
+                        error=reason,
+                    )
         progress(
             translation_status="completed" if len(done) == len(texts) else "failed"
         )
@@ -398,16 +416,20 @@ def process(settings, maker, identifier):
                 )
                 d.add(job)
                 current.layout_status = "queued"
-            elif not ready and not pending and not layout_available(settings):
-                errors.append(ValueError("布局引擎未配置，对照翻译和导读已单独保存"))
+            elif (
+                not ready and not pending and not failed
+                and not layout_available(settings)
+            ):
+                current.layout_status = "unavailable"
             if current.guide_status != "completed":
                 current.guide_status = "failed"
-            current.status = "failed" if errors else "completed" if ready else "waiting"
+            complete = ready or current.layout_status == "unavailable"
+            current.status = "failed" if errors else "completed" if complete else "waiting"
             current.stage = (
                 "准备未完成，已完成内容保留"
                 if errors
                 else "全部就绪"
-                if ready
+                if complete
                 else "等待布局 PDF"
             )
             current.error = "；".join(dict.fromkeys(str(e) for e in errors))[:500]
@@ -423,6 +445,17 @@ def process(settings, maker, identifier):
             d.commit()
     except Exception as error:  # noqa: BLE001 — persist provider and parsing failures so the worker survives
         LOG.warning("Preparation %s failed: %s", identifier, type(error).__name__)
+        reason = str(error) or "阅读准备失败"
+        # Source/extraction failures occur before feature tasks are submitted.
+        # Keep that reason with the guide as well, without replacing a saved one.
+        if config.get("model"):
+            try:
+                save_artifact(
+                    settings, maker, row, file, config, "guide", {}, {},
+                    error=reason,
+                )
+            except Exception:  # noqa: BLE001 — pausing or a full disk must not mask the original failure
+                LOG.warning("Could not save guide failure for %s", identifier)
         with maker() as d:
             d.execute(
                 update(PaperPreparation)
@@ -432,7 +465,7 @@ def process(settings, maker, identifier):
                 )
                 .values(
                     status="failed",
-                    error=str(error)[:500],
+                    error=reason[:500],
                     stage="准备未完成，已完成内容保留",
                     updated_at=now(),
                 )
@@ -490,12 +523,22 @@ def reconcile(settings, maker):
                             TranslationJob.status.in_(["queued", "running"]),
                         )
                     )
-                    if not active_job:
+                    if not active_job and layout_available(settings):
                         row.status = "queued"
             elif enabled(d, row.owner) and read_config(settings, row.owner).get(
                 "api_key"
             ):
                 row.status = "queued"
+        # Installing a layout engine later makes that optional artifact available.
+        if layout_available(settings):
+            for row in d.scalars(
+                select(PaperPreparation).where(
+                    PaperPreparation.status == "completed",
+                    PaperPreparation.layout_status == "unavailable",
+                )
+            ):
+                if enabled(d, row.owner):
+                    row.status = "queued"
         d.commit()
 
 

@@ -208,7 +208,7 @@ test("a figure is explained beside its box and kept in the note with its picture
   await expect(regionMenu(page)).toBeHidden();
   await expect(result(page)).toContainText("图 1 比较了");
   // A model that cannot read images says so.
-  await expect(result(page)).toContainText("不能读图片");
+  await expect(result(page)).toContainText("当前模型看不到图片");
   finished = true;
   await expect(result(page)).toContainText("右侧更好");
   expect(created).toHaveLength(1);
@@ -257,7 +257,7 @@ test("a formula is written as LaTeX that can be copied and kept", async ({
   await regionMenu(page).getByRole("menuitem", { name: "转成 LaTeX" }).click();
   await expect(result(page).getByLabel("LaTeX")).toHaveText("E = m c^{2}");
   // A model that can see is not told otherwise; the formula is drawn as well as written.
-  await expect(result(page)).not.toContainText("不能读图片");
+  await expect(result(page)).not.toContainText("当前模型看不到图片");
   await expect(result(page).locator(".katex")).toBeVisible();
   expect(created[0].reader_context).toMatchObject({
     source: "region",

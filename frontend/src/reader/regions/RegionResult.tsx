@@ -106,7 +106,7 @@ export function RegionResult({
         {translation.status === "noModel" ? (
           <p className={styles.status}>
             {t("reader.region.noModel")}{" "}
-            <a className={styles.link} href="#settings">
+            <a className={styles.link} href="#customize/models">
               {t("reader.translate.settings")}
             </a>
           </p>

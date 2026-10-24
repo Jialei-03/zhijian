@@ -77,6 +77,9 @@ test("opens a paper in the new reader", async ({ page }) => {
 test("the tabs of the side panel switch its text", async ({ page }) => {
   await signIn(page);
   const { paperId } = await createPaperWithPdf(page);
+  await page.route("**/api/v1/translation-settings", (route) =>
+    route.fulfill({ json: { models: [], active_id: "", configured: false } }),
+  );
   await openReader(page, { paperId });
 
   await panelTabs(page).getByRole("tab", { name: "笔记" }).click();
@@ -88,7 +91,21 @@ test("the tabs of the side panel switch its text", async ({ page }) => {
   await expect(
     panelTabs(page).getByRole("tab", { name: "助手" }),
   ).toBeFocused();
-  await expect(page.getByRole("tabpanel")).toContainText("导读");
+  await expect(
+    panelTabs(page).getByRole("tab", { name: "助手" }),
+  ).toHaveAttribute("aria-selected", "true");
+  const assistant = page.getByRole("tabpanel", { name: "助手", exact: true });
+  await expect(assistant).toContainText("未配置模型");
+  const addModel = assistant.getByRole("link", {
+    name: "添加模型",
+    exact: true,
+  });
+  await expect(addModel).toHaveAttribute("href", "#customize/models");
+  await addModel.click();
+  await expect(page).toHaveURL(/#customize\/models$/);
+  await expect(
+    page.getByRole("heading", { name: "模型", exact: true }),
+  ).toBeVisible();
 });
 
 test("an unknown paper explains and links back", async ({ page }) => {

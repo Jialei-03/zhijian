@@ -113,7 +113,7 @@ export const ParallelPage = memo(function ParallelPage({
     status = (
       <p className={styles.note}>
         {t("reader.parallel.noModel")}{" "}
-        <a className={styles.link} href="#settings">
+        <a className={styles.link} href="#customize/models">
           {t("reader.parallel.settings")}
         </a>
       </p>

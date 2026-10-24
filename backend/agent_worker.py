@@ -471,8 +471,8 @@ def _process(app, job_id, cfg):
                 "\nYou are a team member. Reply in the researcher's language. Outside a research round, "
                 "finish with a normal answer; do not call advise/end_sprint/distill. "
                 "Use team tools to read context and send messages. To hand work to members, "
-                "name them in team_send_message's `to`; @Name in text only refers to someone. "
-                "Name someone in `to` only when they still have work to do; a finished result needs no `to`, the thread shows it. "
+                "name them in team_send_message's `wake`; @Name in text only refers to someone. "
+                "Put someone in `wake` only when they still have work to do; reporting a result needs no `wake`, the thread shows it. "
                 "Answer what was asked at the length asked; keep verification notes to what the reader needs. "
                 "Reply in the originating thread; follow the user's stated order and workflow. "
                 "When you need the owner's decision, ask explicitly with team_wait_for_owner. "
@@ -504,6 +504,14 @@ def _process(app, job_id, cfg):
                 r.runtime = {**r.runtime, "team": team_context}
                 payload["tools"] = [*payload["tools"], *TEAM_TOOLS]
                 payload["context"] += "\nTeam context: " + json.dumps(team_context)
+                from .models import ResearchWorkspace
+                from .team_message_marks import context_pins
+
+                workspace = d.get(ResearchWorkspace, team_context["workspace_id"])
+                payload["context"] += "\nChannel pins:\n" + json.dumps(
+                    context_pins(d, workspace, team_context["channel_id"]),
+                    ensure_ascii=False,
+                )
                 d.commit()
     payload["context"] += selection_context(app, owner, session_id, job_id, snapshot)
     if research:
@@ -1136,7 +1144,7 @@ def _process(app, job_id, cfg):
             current.runtime = {
                 k: v
                 for k, v in (current.runtime or {}).items()
-                if k != "artifact_preview"
+                if k not in {"artifact_preview", "team_status"}
             }
         d.commit()
 
@@ -1189,6 +1197,28 @@ def ready_job(d, settings):
         .limit(32)
         .with_for_update(skip_locked=True)
     ):
+        from .models import AgentSession, TeamMember
+        from .research_team import research_context
+
+        info = (job.runtime or {}).get("team")
+        if not info and (job.runtime or {}).get("research", {}).get("project_id"):
+            info = research_context(d, job.runtime["research"], job.owner)
+        member = d.get(TeamMember, info["member_id"]) if info else None
+        if member is None:
+            member = d.scalar(
+                select(TeamMember).where(TeamMember.session_id == job.session_id)
+            )
+        if member is None:
+            session = d.get(AgentSession, job.session_id)
+            if session and session.kind in {"project_lead", "project_chat"}:
+                member = d.scalar(
+                    select(TeamMember).where(
+                        TeamMember.workspace_id == session.workspace_id,
+                        TeamMember.role == "advisor",
+                    )
+                )
+        if member and member.paused:
+            continue
         if (
             job.lane == "translation"
             and settings.agent_translation_workers
@@ -1230,7 +1260,14 @@ def main():
             for interrupted in d.scalars(
                 select(AgentRun).where(AgentRun.status.in_(["running", "cancelled"]))
             ):
-                interrupted.runtime = {**(interrupted.runtime or {}), "settled": True}
+                interrupted.runtime = {
+                    **{
+                        k: v
+                        for k, v in (interrupted.runtime or {}).items()
+                        if k != "team_status"
+                    },
+                    "settled": True,
+                }
                 if interrupted.status == "running":
                     interrupted.runtime = {**interrupted.runtime, "interrupted": True}
                     interrupted.status = "failed"
@@ -1271,7 +1308,11 @@ def main():
                         )
                         if stopped:
                             stopped.runtime = {
-                                **(stopped.runtime or {}),
+                                **{
+                                    k: v
+                                    for k, v in (stopped.runtime or {}).items()
+                                    if k != "team_status"
+                                },
                                 "settled": True,
                             }
                         d.execute(

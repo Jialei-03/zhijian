@@ -14,6 +14,7 @@ from backend import research_team as team
 from backend import team_rules
 from backend.agent_tools import execute
 from backend.models import (
+    AgentRun,
     ResearchWorkflow,
     ResearchWorkspace,
     TeamDelivery,
@@ -312,9 +313,9 @@ def test_rule_posts_reenter_channel_rules_once_without_recursive_dispatch(world)
         )
         assert len(posts) == 2 and all(p.thread_id is None for p in posts)
     team.settle(settings, app.state.maker)
-    assert len(deliveries(app)) == 2
+    assert len(deliveries(app)) == 1
     team.settle(settings, app.state.maker)
-    assert len(deliveries(app)) == 2
+    assert len(deliveries(app)) == 1
 
 
 def test_switching_workflows_restores_the_teams_saved_rules_and_layout(world):
@@ -350,6 +351,13 @@ def test_runtime_marks_completion_time_instead_of_the_placeholder_message_time(w
         d.commit()
     finish(app, delivery.run_id, "@writer Continue", ["writer"])
     team.settle(settings, app.state.maker)
+    with app.state.maker() as d:
+        response = d.scalar(
+            select(TeamMessage).where(
+                TeamMessage.source_key == f"run:{delivery.run_id}"
+            )
+        )
+        assert response.created_at == d.get(AgentRun, delivery.run_id).updated_at
     fired = a.get(base).json()["runtime"]["fired"]
     assert fired[-1]["rule"] == "@mention"
     assert fired[-1]["at"] > "2000-01-02"

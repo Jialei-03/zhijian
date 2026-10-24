@@ -1,3 +1,5 @@
+import type { Translator } from "../../../i18n/i18n";
+
 /**
  * An agent's run, read the way claude-web reads a turn: what it said and the
  * tools it used, in order; runs of the same finished tool merged into one row;
@@ -342,10 +344,23 @@ export function logText(report: Pick<JobReport, "lines" | "total" | "cut">) {
 }
 
 /** A length of time, short: 45s, 3m12s, 2h5m. */
-export function shortDuration(seconds: number) {
+export function shortDuration(seconds: number, t?: Translator["t"]) {
   const s = Math.max(0, Math.round(seconds));
+  const minutes = Math.round(s / 60);
+  if (t)
+    return s >= 3600
+      ? t("reader.assistant.duration.hours", {
+          hours: Math.floor(minutes / 60),
+          minutes: minutes % 60,
+        })
+      : s >= 60
+        ? t("reader.assistant.duration.minutes", {
+            minutes: Math.floor(s / 60),
+            seconds: s % 60,
+          })
+        : t("reader.assistant.duration.seconds", { seconds: s });
   return s >= 3600
-    ? `${Math.floor(s / 3600)}h${Math.round((s % 3600) / 60)}m`
+    ? `${Math.floor(minutes / 60)}h${minutes % 60}m`
     : s >= 60
       ? `${Math.floor(s / 60)}m${s % 60}s`
       : `${s}s`;

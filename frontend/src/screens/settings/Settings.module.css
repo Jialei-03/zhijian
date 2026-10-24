@@ -3,7 +3,6 @@
   flex-direction: column;
   gap: var(--ui-space-40);
   box-sizing: border-box;
-  max-width: var(--settings-column);
   margin: 0 auto;
   padding: var(--ui-space-24) var(--ui-space-24) var(--ui-space-48);
 }
@@ -11,7 +10,8 @@
 .section {
   display: flex;
   flex-direction: column;
-  gap: var(--ui-space-12);
+  gap: 0;
+  min-width: 0;
 }
 
 .sectionHead {
@@ -19,17 +19,21 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--ui-space-12);
-  padding-bottom: var(--ui-space-8);
-  border-bottom: 1px solid var(--ui-edge-subtle);
+  margin: 22px 0 var(--ui-space-8) var(--ui-space-2);
 }
 
 .sectionHead[hidden] {
   display: none;
 }
 
+.sectionHead[hidden] + :not(.subTitle) {
+  margin-top: 22px;
+}
+
 .sectionTitle {
   margin: 0;
-  font-size: var(--ui-text-15);
+  color: var(--ui-fg);
+  font-size: var(--ui-text-14);
   font-weight: var(--ui-weight-strong);
   line-height: var(--ui-leading-tight);
 }
@@ -41,10 +45,45 @@
 }
 
 .subTitle {
-  margin: var(--ui-space-8) 0 0;
-  color: var(--ui-fg-1);
-  font-size: var(--ui-text-13);
+  margin: 22px 0 var(--ui-space-8) var(--ui-space-2);
+  color: var(--ui-fg);
+  font-size: var(--ui-text-14);
   font-weight: var(--ui-weight-strong);
+}
+
+.card,
+.list {
+  border-radius: var(--ui-r-16);
+  background: var(--ui-bg);
+  box-shadow: var(--ui-elev-1);
+}
+
+.card > * {
+  position: relative;
+  min-width: 0;
+}
+
+.card > * + *::before {
+  position: absolute;
+  top: 0;
+  right: var(--ui-space-16);
+  left: var(--ui-space-16);
+  height: 1px;
+  background: var(--ui-edge-subtle);
+  content: "";
+}
+
+.settingDetails {
+  min-width: 0;
+  min-height: 56px;
+  padding: var(--ui-space-12) var(--ui-space-16);
+  overflow-wrap: anywhere;
+}
+
+.storageDetails {
+  display: grid;
+  gap: var(--ui-space-12);
+  padding: 0 var(--ui-space-16) var(--ui-space-12);
 }
 
 /* A setting: what it is on the left, its control on the right. */
@@ -53,37 +92,42 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--ui-space-16);
-  min-height: var(--ui-control-lg);
+  min-height: 56px;
+  padding: var(--ui-space-12) var(--ui-space-16);
+  flex-wrap: wrap;
+  color: var(--ui-fg);
+  font-size: var(--ui-text-14);
 }
 
 .settingLabel {
-  color: var(--ui-fg-1);
+  color: var(--ui-fg);
+  font-size: var(--ui-text-14);
 }
 
 /* What a setting does, in a line or two under it. */
 .settingHint {
   margin: 0;
-  color: var(--ui-fg-2);
+  color: var(--ui-fg-3);
   font-size: var(--ui-text-13);
-  line-height: var(--ui-leading);
+  line-height: 1.5;
 }
 
 .list {
   display: flex;
   flex-direction: column;
   margin: 0;
-  padding: 0;
+  padding: var(--ui-space-4);
   list-style: none;
 }
 
 .row {
   display: flex;
   align-items: center;
-  gap: var(--ui-space-12);
+  gap: 9px;
   min-height: var(--ui-control-lg);
-  padding: var(--ui-space-8) var(--ui-space-10);
-  margin: 0 calc(-1 * var(--ui-space-10));
-  border-radius: var(--ui-r-8);
+  padding: 7px 9px;
+  border-radius: var(--ui-r-12);
+  font-size: var(--ui-text-14);
   transition: background-color var(--ui-dur-1) var(--ui-ease-out);
 }
 
@@ -115,6 +159,12 @@
   font-size: var(--ui-text-12);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.logPath {
+  overflow-wrap: anywhere;
+  color: var(--ui-fg-2);
+  font-size: var(--ui-text-12);
 }
 
 .rowActions {
@@ -157,8 +207,17 @@
 
 .cloudForm {
   display: grid;
-  gap: var(--ui-space-12);
   max-width: var(--ui-dialog-sm);
+}
+
+.cloudForm > * {
+  min-height: 56px;
+  padding: var(--ui-space-12) var(--ui-space-16);
+}
+
+.cloudForm label {
+  color: var(--ui-fg);
+  font-size: var(--ui-text-14);
 }
 
 .cloudActions {
@@ -346,12 +405,6 @@
   opacity: 0.6;
 }
 
-.section {
-  min-width: 0;
-}
-.setting {
-  flex-wrap: wrap;
-}
 .link:focus-visible {
   outline: none;
   box-shadow: var(--ui-focus-ring);

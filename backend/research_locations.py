@@ -1,11 +1,13 @@
 """Physical workspaces and non-interactive SSH connections.
 
-Binding a folder never creates it or changes its Git repository. Runtime
+Existing-folder binding never changes its Git repository. New folders are
+created only when explicitly requested. Runtime
 metadata stays under the application's data directory, away from user files.
 """
 
 import json
 import os
+import posixpath
 import shlex
 import subprocess
 from pathlib import Path
@@ -18,6 +20,59 @@ from sqlalchemy import or_, select
 
 from . import research_settings
 from .schemas import Strict
+
+SYSTEM_FOLDERS = (
+    "/Users",
+    "/System",
+    "/Library",
+    "/Applications",
+    "/usr",
+    "/bin",
+    "/etc",
+    "/var",
+    "/private",
+)
+HOME_FOLDERS = ("Library", "Desktop", "Documents", "Downloads")
+FOLDER_ERRORS = {
+    "root": "不能用根目录",
+    "home": "不能用主目录",
+    "system": "不能用系统目录",
+    "personal": "不能用个人目录",
+    "git": "不能用 Git 元数据目录",
+}
+
+
+def project_folder_error(path, home="~", *, resolve=False):
+    """Exact protected roots, including aliases; their project subfolders are allowed."""
+
+    def normalize(value):
+        if resolve:
+            return str(Path(value).expanduser().resolve())
+        return posixpath.normpath(
+            "/" + value.lstrip("/") if value.startswith("/") else value
+        )
+
+    path, home = normalize(path), normalize(home)
+    if path == home:
+        return "home"
+    if path == normalize("/"):
+        return "root"
+    if path in {normalize(p) for p in SYSTEM_FOLDERS}:
+        return "system"
+    if path in {normalize(f"{home}/{p}") for p in HOME_FOLDERS}:
+        return "personal"
+    if ".git" in (part.lower() for part in path.split("/")):
+        return "git"
+    return ""
+
+
+def check_folder_name(name):
+    if (
+        not name
+        or name in {".", ".."}
+        or any(char in name for char in ("/", "\\", "\0", "\n", "\r"))
+    ):
+        raise ValueError("文件夹名称不合法")
 
 
 class ConnectionInput(Strict):
@@ -64,15 +119,29 @@ def connection(settings, connection_id):
     return item
 
 
-def _remote_query(item, path, validate=False):
+def _remote_query(item, path, validate=False, create_folder=""):
     from . import research_sandbox
 
     script = """import json,os,sys
 r=json.load(sys.stdin)
-p=os.path.realpath(os.path.expanduser(r.get('path') or '~'))
+home=os.path.realpath(os.path.expanduser('~'))
+p=os.path.realpath(os.path.expanduser(r['path'] or os.path.join(home,'ORA')))
+if not r['path'] and p not in {home,'/'}:
+    os.makedirs(os.path.join(home,'ORA'),exist_ok=True)
 if not os.path.isdir(p): raise ValueError('目录不存在')
+target=os.path.join(p,r['create_folder']) if r['create_folder'] else p
+p=os.path.realpath(target)
+blocked={os.path.realpath(v):'system' for v in r['system_folders']}
+blocked.update({os.path.realpath(os.path.join(home,v)):'personal' for v in r['home_folders']})
+blocked.update({'/':'root',home:'home'})
+error=blocked.get(p,'')
+if '.git' in (v.lower() for v in p.split('/')): error='git'
+if (r['validate'] or r['create_folder'] or not r['path']) and error: raise ValueError(r['errors'][error])
+if r['create_folder']:
+    try: os.mkdir(target)
+    except FileExistsError: raise ValueError('文件夹已存在') from None
 if r.get('validate') and not os.access(p,os.W_OK|os.X_OK): raise ValueError('目录不可写')
-out={'path':p,'parent':None if os.path.dirname(p)==p else os.path.dirname(p),'entries':[]}
+out={'path':p,'parent':None if os.path.dirname(p)==p else os.path.dirname(p),'entries':[],'project_error':error}
 if not r.get('validate'):
     out['entries']=sorted([{'name':e.name,'path':os.path.join(p,e.name)} for e in os.scandir(p) if e.is_dir()],key=lambda x:x['name'].lower())[:2000]
 print(json.dumps(out,ensure_ascii=False))
@@ -82,7 +151,17 @@ print(json.dumps(out,ensure_ascii=False))
     try:
         done = research_sandbox.run(
             [*ssh_args(item), item["host"], "python3 -c " + shlex.quote(script)],
-            input=json.dumps({"path": path, "validate": validate}) + "\n",
+            input=json.dumps(
+                {
+                    "path": path,
+                    "validate": validate,
+                    "create_folder": create_folder,
+                    "system_folders": SYSTEM_FOLDERS,
+                    "home_folders": HOME_FOLDERS,
+                    "errors": FOLDER_ERRORS,
+                }
+            )
+            + "\n",
             capture_output=True,
             text=True,
             timeout=25,
@@ -102,7 +181,14 @@ def folders(settings, kind, path="", connection_id=""):
         return _remote_query(connection(settings, connection_id), path)
     if kind != "local":
         raise ValueError("请选择本机或 SSH")
-    folder = Path(path or Path.home()).expanduser().resolve()
+    if not path:
+        default = Path.home() / "ORA"
+        error = project_folder_error(str(default), str(Path.home()), resolve=True)
+        if error:
+            raise ValueError(FOLDER_ERRORS[error])
+        default.mkdir(exist_ok=True)
+        path = str(default)
+    folder = Path(path).expanduser().resolve()
     if not folder.is_dir():
         raise ValueError("目录不存在")
     entries = []
@@ -116,29 +202,62 @@ def folders(settings, kind, path="", connection_id=""):
         "path": str(folder),
         "parent": None if folder.parent == folder else str(folder.parent),
         "entries": entries[:2000],
+        "project_error": project_folder_error(
+            str(folder), str(Path.home()), resolve=True
+        ),
     }
 
 
-def validate_location(settings, location):
+def validate_location(settings, location, *, create_folder=""):
     location = location or {"kind": "managed"}
     if not isinstance(location, dict):
         raise ValueError("工作区位置不合法")
     kind, path = location.get("kind", "managed"), location.get("path") or ""
+    if create_folder:
+        check_folder_name(create_folder)
     if kind == "managed":
+        if create_folder:
+            raise ValueError("请选择本机或 SSH 目录")
         return {"kind": "managed", "path": "", "connection_id": ""}
     if kind == "ssh":
         cid = location.get("connection_id") or ""
-        found = _remote_query(connection(settings, cid), path, validate=True)
-        if ".git" in (part.lower() for part in Path(found["path"]).parts):
-            raise ValueError("请选择项目目录，不要选择 Git 元数据目录")
+        if not isinstance(path, str) or not path or any(c in path for c in "\0\n\r"):
+            raise ValueError("请选择已存在的 SSH 目录")
+        target = posixpath.join(path, create_folder) if create_folder else path
+        error = project_folder_error(target)
+        if error:
+            raise ValueError(FOLDER_ERRORS[error])
+        found = _remote_query(
+            connection(settings, cid),
+            path,
+            validate=True,
+            create_folder=create_folder,
+        )
+        error = found.get("project_error") or project_folder_error(found["path"])
+        if error:
+            raise ValueError(FOLDER_ERRORS[error])
         return {"kind": "ssh", "path": found["path"], "connection_id": cid}
-    if kind != "local" or not isinstance(path, str) or not path or "\0" in path:
+    if (
+        kind != "local"
+        or not isinstance(path, str)
+        or not path
+        or any(c in path for c in "\0\n\r")
+    ):
         raise ValueError("请选择已存在的本机或 SSH 目录")
-    folder = Path(path).expanduser().resolve()
-    if ".git" in (part.lower() for part in folder.parts):
-        raise ValueError("请选择项目目录，不要选择 Git 元数据目录")
-    if not folder.is_dir():
+    parent = Path(path).expanduser().resolve()
+    folder = parent
+    if create_folder:
+        folder = parent / create_folder
+    error = project_folder_error(str(folder), str(Path.home()), resolve=True)
+    if error:
+        raise ValueError(FOLDER_ERRORS[error])
+    if not parent.is_dir():
         raise ValueError("目录不存在")
+    if create_folder:
+        try:
+            folder.mkdir()
+        except FileExistsError:
+            raise ValueError("文件夹已存在") from None
     if not os.access(folder, os.W_OK | os.X_OK):
         raise ValueError("目录不可写")
     return {"kind": "local", "path": str(folder), "connection_id": ""}
@@ -391,7 +510,7 @@ def install_location_routes(app, settings, db, auth, human, owned):
                 }
             )
             ssh_args(item)
-            _remote_query(item, "", validate=False)
+            _remote_query(item, "~", validate=False)
             data = research_settings.load(settings)
             previous = next((c for c in data["computes"] if c["id"] == cid), None)
             if previous and previous.get("kind") != "ssh":

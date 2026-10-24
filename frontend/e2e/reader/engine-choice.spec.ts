@@ -173,8 +173,12 @@ test("each way is chosen and started by the person, and nothing starts by itself
   await expect(panel(page)).toBeVisible();
   await expect(way(page, "源码重编")).toContainText("未开始");
   await expect(way(page, "版面翻译")).toContainText("未开始");
-  await expect(way(page, "源码重编")).toContainText("排版最好");
-  await expect(way(page, "版面翻译")).toContainText("任何 PDF 都能用");
+  await expect(
+    way(page, "源码重编").getByRole("button", { name: "开始源码重编" }),
+  ).toBeEnabled();
+  await expect(
+    way(page, "版面翻译").getByRole("button", { name: "开始版面翻译" }),
+  ).toBeEnabled();
   expect(service.started).toEqual([]);
 
   await way(page, "源码重编")

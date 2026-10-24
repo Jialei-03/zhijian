@@ -12,29 +12,35 @@ export function AppearanceSection() {
   const { mode, setMode } = useAppearance();
   return (
     <Section title={t("settings.appearance.title")}>
-      <div className={styles.setting}>
-        <span className={styles.settingLabel}>
-          {t("settings.appearance.label")}
-        </span>
-        <SegmentedControl<Appearance>
-          kind="radio"
-          label={t("settings.appearance.label")}
-          value={mode}
-          onChange={setMode}
-          options={[
-            {
-              value: "system",
-              label: t("settings.appearance.system"),
-              icon: Monitor,
-            },
-            {
-              value: "light",
-              label: t("settings.appearance.light"),
-              icon: Sun,
-            },
-            { value: "dark", label: t("settings.appearance.dark"), icon: Moon },
-          ]}
-        />
+      <div className={styles.card}>
+        <div className={styles.setting}>
+          <span className={styles.settingLabel}>
+            {t("settings.appearance.label")}
+          </span>
+          <SegmentedControl<Appearance>
+            kind="radio"
+            label={t("settings.appearance.label")}
+            value={mode}
+            onChange={setMode}
+            options={[
+              {
+                value: "system",
+                label: t("settings.appearance.system"),
+                icon: Monitor,
+              },
+              {
+                value: "light",
+                label: t("settings.appearance.light"),
+                icon: Sun,
+              },
+              {
+                value: "dark",
+                label: t("settings.appearance.dark"),
+                icon: Moon,
+              },
+            ]}
+          />
+        </div>
       </div>
     </Section>
   );
@@ -45,20 +51,22 @@ export function LanguageSection() {
   const { t, locale, setLocale } = useI18n();
   return (
     <Section title={t("settings.language.title")}>
-      <div className={styles.setting}>
-        <span className={styles.settingLabel}>
-          {t("settings.language.label")}
-        </span>
-        <SegmentedControl<Locale>
-          kind="radio"
-          label={t("settings.language.label")}
-          value={locale}
-          onChange={setLocale}
-          options={[
-            { value: "zh", label: t("settings.language.zh") },
-            { value: "en", label: t("settings.language.en") },
-          ]}
-        />
+      <div className={styles.card}>
+        <div className={styles.setting}>
+          <span className={styles.settingLabel}>
+            {t("settings.language.label")}
+          </span>
+          <SegmentedControl<Locale>
+            kind="radio"
+            label={t("settings.language.label")}
+            value={locale}
+            onChange={setLocale}
+            options={[
+              { value: "zh", label: t("settings.language.zh") },
+              { value: "en", label: t("settings.language.en") },
+            ]}
+          />
+        </div>
       </div>
     </Section>
   );
@@ -70,20 +78,22 @@ export function KeypointsSection() {
   const [enabled, setEnabled] = useKeypointsEnabled();
   return (
     <Section title={t("settings.keypoints.title")}>
-      <div className={styles.setting}>
-        <span className={styles.settingLabel}>
-          {t("settings.keypoints.label")}
-        </span>
-        <SegmentedControl<"on" | "off">
-          kind="radio"
-          label={t("settings.keypoints.label")}
-          value={enabled ? "on" : "off"}
-          onChange={(value) => setEnabled(value === "on")}
-          options={[
-            { value: "on", label: t("settings.keypoints.on") },
-            { value: "off", label: t("settings.keypoints.off") },
-          ]}
-        />
+      <div className={styles.card}>
+        <div className={styles.setting}>
+          <span className={styles.settingLabel}>
+            {t("settings.keypoints.label")}
+          </span>
+          <SegmentedControl<"on" | "off">
+            kind="radio"
+            label={t("settings.keypoints.label")}
+            value={enabled ? "on" : "off"}
+            onChange={(value) => setEnabled(value === "on")}
+            options={[
+              { value: "on", label: t("settings.keypoints.on") },
+              { value: "off", label: t("settings.keypoints.off") },
+            ]}
+          />
+        </div>
       </div>
     </Section>
   );

@@ -300,3 +300,14 @@ def test_a_strength_chosen_with_the_question_is_used_for_that_run_only(env):
     # A strength the model does not offer is refused.
     refused = ask(model_options={"thinking_mode": "enabled"})
     assert refused.status_code == 422
+
+
+def test_release_and_preview_minimax_share_task_strengths():
+    from backend.agent_limits import LARGE_OUTPUT_TOKENS, output_tokens
+    from backend.model_options import task_options
+
+    for name in ("MiniMax-M3.1-Flash", "MiniMax-M3.1-Flash-Preview"):
+        config = {"model": name}
+        assert task_options(config, "guide")["reasoning_effort"] == "low"
+        assert task_options(config, "page_translation")["reasoning_effort"] == "low"
+        assert output_tokens(config) == LARGE_OUTPUT_TOKENS

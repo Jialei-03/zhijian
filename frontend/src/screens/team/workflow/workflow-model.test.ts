@@ -24,6 +24,7 @@ import {
   workflowToFlow,
   updateCanvasNodes,
   type Workflow,
+  type WorkflowRule,
 } from "./workflow-model";
 
 const fixture = () => structuredClone(workflowFixture);
@@ -37,6 +38,35 @@ const connect = (source: string, target: string): Connection => ({
 });
 
 describe("contract rules and flow edges", () => {
+  it("preserves decision events and the dynamic original-author target", () => {
+    for (const event of ["accepted", "changes_requested"] as const) {
+      const rule: WorkflowRule = {
+        id: "decision",
+        enabled: true,
+        when: { event },
+        then: { action: "wake", member: "$author" },
+      };
+      expect(validateRule(rule)).toBe(true);
+      const flow = { ...fixture(), rules: [rule] };
+      const { nodes, edges } = graph(flow);
+      expect(
+        nodes.find((node) => node.id === "author:$author")?.data.kind,
+      ).toBe("author");
+      expect(edges[0].target).toBe("author:$author");
+      expect(layoutFromNodes(flow, nodes).layout.members).not.toHaveProperty(
+        "$author",
+      );
+      for (const locale of ["zh", "en"] as const) {
+        const { t } = createTranslator(locale);
+        expect(ruleSummary(rule, members, channels, t)).toContain(
+          t("teamWorkflow.originalAuthor"),
+        );
+        expect(ruleSummary(rule, members, channels, t)).toContain(
+          t(`teamWorkflow.event.${event}`),
+        );
+      }
+    }
+  });
   it("projects reviews, return lines, owner waits, subscriptions and schedules without losing fields", () => {
     const workflow = fixture();
     const before = structuredClone(workflow);
@@ -161,7 +191,7 @@ describe("editing and ordering the one workflow", () => {
     const rule = structuredClone(edgeToRule(edge, workflow)!);
     rule.then.instruction = "Check again";
     rule.then.max_rounds = 5;
-    rule.limit.per_thread = 7;
+    rule.limit = { per_thread: 7 };
     rule.enabled = false;
     const next = saveRule(workflow, rule);
     expect(next.rules[0]).toEqual(rule);
@@ -172,6 +202,7 @@ describe("editing and ordering the one workflow", () => {
     expect(workflow.rules[0].then.instruction).toBe("Check results");
     expect(next.layout).toBe(workflow.layout);
     const created = newRule("new");
+    expect(created.limit?.per_thread).toBe(0);
     expect(saveRule(next, created).rules.at(-1)).toBe(created);
   });
 
@@ -199,7 +230,7 @@ describe("editing and ordering the one workflow", () => {
     expect(validateRule(rule)).toBe(false);
     rule.then.member = "executor";
     expect(validateRule(rule)).toBe(true);
-    for (const limit of [0, -1, 1.5, NaN, Infinity])
+    for (const limit of [-1, 1.5, NaN, Infinity])
       expect(validateRule({ ...rule, limit: { per_thread: limit } })).toBe(
         false,
       );
@@ -207,9 +238,22 @@ describe("editing and ordering the one workflow", () => {
     expect(
       validateRule({ ...review, then: { ...review.then, on_fail: undefined } }),
     ).toBe(false);
-    expect(
-      validateRule({ ...review, then: { ...review.then, max_rounds: 0 } }),
-    ).toBe(false);
+    for (const maximum of [-1, 1.5, NaN, Infinity])
+      expect(
+        validateRule({
+          ...review,
+          then: { ...review.then, max_rounds: maximum },
+        }),
+      ).toBe(false);
+    for (const limit of [undefined, {}, { per_thread: 0 }])
+      for (const maximum of [undefined, 0, 5])
+        expect(
+          validateRule({
+            ...review,
+            limit,
+            then: { ...review.then, max_rounds: maximum },
+          }),
+        ).toBe(true);
     const schedule = fixture().rules[3];
     for (const cron of [
       "0 9 * *",
@@ -369,12 +413,45 @@ describe("localized list and shared editor", () => {
       renderToStaticMarkup(
         createElement(I18nProvider, { locale, children: child }),
       );
+    for (const maximum of [undefined, 0])
+      it(`${locale} renders missing/zero (${maximum}) limits as unlimited`, () => {
+        const rule = {
+          ...fixture().rules[0],
+          limit: maximum === undefined ? undefined : { per_thread: maximum },
+          then: { ...fixture().rules[0].then, max_rounds: maximum },
+        };
+        expect(ruleSummary(rule, members, channels, t)).not.toContain(
+          t("team.unlimited"),
+        );
+        const editor = render(
+          createElement(RuleEditor, {
+            rule,
+            members,
+            channels,
+            onSave: vi.fn(),
+            onClose: vi.fn(),
+          }),
+        );
+        const limits = editor.match(/<input[^>]*type="number"[^>]*>/g)!;
+        expect(limits).toHaveLength(2);
+        for (const input of limits) {
+          expect(input).toContain(`placeholder="${t("team.unlimited")}"`);
+          expect(input).toContain('value=""');
+          expect(input).toContain('min="0"');
+          expect(input).not.toContain("required");
+        }
+      });
     it(`${locale} displays names and provides the review editor fields`, () => {
       const workflow = fixture();
       const summary = ruleSummary(workflow.rules[0], members, channels, t);
       expect(summary).toContain("Alex");
       expect(summary).toContain("Morgan");
       expect(summary).toContain("Lab");
+      expect(summary).toBe(
+        locale === "en"
+          ? "When Lab · Alex · Message received · Result → Morgan · Review"
+          : "当 Lab · Alex · 收到消息 · 结果 时 → Morgan · 评审",
+      );
       const html = render(
         createElement(WorkflowRules, {
           workflow,
@@ -407,6 +484,90 @@ describe("localized list and shared editor", () => {
       ] as const)
         expect(editor).toContain(t(`teamWorkflow.${key}`));
       expect(editor).not.toContain("description=");
+    });
+
+    it(`${locale} localizes every contract and legacy action without including instructions`, () => {
+      for (const action of [
+        "wake",
+        "review",
+        "wait_for_owner",
+        "post",
+        "conclusion",
+        "retrospective",
+        "child_research",
+      ] as const) {
+        const rule = {
+          ...fixture().rules[0],
+          then: {
+            ...fixture().rules[0].then,
+            action: action as WorkflowRule["then"]["action"],
+            instruction:
+              "结论: 总结实验结论\naction: conclusion\naction: retrospective",
+            text: "Full channel post",
+            channel: "papers",
+          },
+        };
+        const summary = ruleSummary(rule, members, channels, t);
+        expect(summary).toContain(t(`teamWorkflow.action.${action}`));
+        expect(summary).not.toMatch(
+          /action:|instruction:|conclusion|retrospective|\n/,
+        );
+        expect(summary).not.toContain(rule.then.text);
+        expect(summary).not.toContain(
+          t("teamWorkflow.returnTo", { name: "Alex", count: 3 }),
+        );
+        if (action === "post") expect(summary).toContain("Papers");
+        if (action === "wait_for_owner")
+          expect(summary).toContain(t("teamWorkflow.me"));
+      }
+    });
+
+    it(`${locale} ignores unknown fields and enum values`, () => {
+      const rule = fixture().rules[0];
+      const summary = ruleSummary(rule, members, channels, t);
+      const extended = {
+        ...rule,
+        unknown: "private metadata",
+        when: { ...rule.when, unknown: "private trigger" },
+        then: { ...rule.then, unknown: "private action" },
+      };
+      expect(ruleSummary(extended, members, channels, t)).toBe(summary);
+      const future = {
+        ...extended,
+        when: { ...extended.when, event: "future_event", kind: "future_kind" },
+        then: { ...extended.then, action: "future_action" },
+      } as unknown as WorkflowRule;
+      expect(ruleSummary(future, members, channels, t)).toBe(
+        t("teamWorkflow.summary", { source: "Lab · Alex", action: "" }),
+      );
+    });
+
+    it(`${locale} keeps the complete instruction in the editor only`, () => {
+      const rule = fixture().rules[0];
+      rule.then.instruction = "Detailed instruction\naction: retrospective";
+      const before = structuredClone(rule);
+      const list = render(
+        createElement(WorkflowRules, {
+          workflow: { ...fixture(), rules: [rule] },
+          members,
+          channels,
+          onChange: vi.fn(),
+          onEdit: vi.fn(),
+        }),
+      );
+      expect(list).not.toContain("Detailed instruction");
+      expect(list).not.toContain("action:");
+      const editor = render(
+        createElement(RuleEditor, {
+          rule,
+          members,
+          channels,
+          onSave: vi.fn(),
+          onClose: vi.fn(),
+        }),
+      );
+      expect(editor).toContain(rule.then.instruction);
+      expect(rule).toEqual(before);
     });
   }
 });

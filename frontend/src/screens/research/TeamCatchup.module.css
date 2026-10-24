@@ -1,0 +1,24 @@
+.summary {
+  max-width: var(--ui-conversation-width);
+  margin: var(--ui-space-12) auto;
+  padding: var(--ui-space-12) var(--ui-space-16);
+  border: 1px solid var(--ui-edge);
+  border-radius: var(--ui-r-12);
+  background: var(--ui-bg-1);
+  font-size: var(--ui-text-13);
+  overflow-wrap: anywhere;
+}
+
+.summary header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-space-8);
+}
+
+.events {
+  display: grid;
+  gap: var(--ui-space-8);
+  margin: var(--ui-space-8) 0;
+  color: var(--ui-fg-2);
+}

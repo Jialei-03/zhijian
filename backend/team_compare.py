@@ -20,6 +20,7 @@ from .models import (
     ResearchJob,
     ResearchNode,
     ResearchSprint,
+    ResearchWorkflow,
     now,
 )
 
@@ -47,6 +48,22 @@ def _seconds(start, end):
 def _sentence(text):
     text = " ".join((text or "").split())
     return re.split(r"(?<=[。！？!?])\s*|(?<=\.)\s+", text, maxsplit=1)[0][:400]
+
+
+def _workflow_name(d, project):
+    from .research_workflows import BUILTINS
+
+    workflow = project.workflow or {}
+    identifier = workflow.get("id") or "research"
+    name = workflow.get("name")
+    if name and name != identifier:
+        return name
+    if identifier in BUILTINS:
+        return BUILTINS[identifier]["name"]
+    definition = d.get(ResearchWorkflow, identifier)
+    if definition and definition.owner == project.owner:
+        return definition.name
+    return name or identifier
 
 
 def _numbers(project, nodes, jobs):
@@ -156,7 +173,7 @@ def comparison(d, projects, *, members_by_thread=None, at=None):
             {
                 "id": project.id,
                 "title": project.title or project.question,
-                "workflow": (project.workflow or {}).get("name", "research"),
+                "workflow": _workflow_name(d, project),
                 "status": project.status,
                 "conclusion": _sentence(answer),
                 "numbers": _numbers(project, nodes, jobs),

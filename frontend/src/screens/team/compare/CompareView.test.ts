@@ -19,7 +19,7 @@ export const first: ComparisonThread = {
   numbers: [{ name: "accuracy", value: 0.91 }],
   tokens: 1000,
   job_seconds: 90,
-  elapsed_seconds: 120,
+  elapsed_seconds: 9408,
   rounds: 2,
   members: [{ id: "executor", name: "executor", messages: 2, tokens: 1000 }],
 };
@@ -30,6 +30,7 @@ export const second: ComparisonThread = {
   workflow: "Peers",
   numbers: [{ name: "accuracy", value: 0.95 }],
   tokens: 800,
+  job_seconds: 6758,
 };
 
 describe("comparison contract views", () => {
@@ -54,6 +55,10 @@ describe("comparison contract views", () => {
       expect(html).toContain('data-different="true">800');
       expect(html).toContain(locale === "zh" ? "成员参与" : "Participation");
       expect(html).toContain(locale === "zh" ? "执行者" : "Executor");
+      expect(html).toContain(locale === "zh" ? "1 分 30 秒" : "1m 30s");
+      expect(html).toContain(locale === "zh" ? "2 小时 37 分" : "2h 37m");
+      expect(html).toContain(locale === "zh" ? "1 小时 53 分" : "1h 53m");
+      expect(html).not.toContain("9,408");
       expect(html).not.toContain("undefined");
     });
   }
@@ -84,6 +89,7 @@ describe("comparison contract views", () => {
     expect(html).toContain("0.91");
     expect(html).toContain("0.95");
     expect(html).toContain(`#research/${second.id}`);
+    expect(html).toContain("2h 37m");
   });
   it("routes a workspace comparison without redirecting to the research list", () => {
     expect(parseAppRoute(`workspaces/${first.id}/compare`)).toEqual({

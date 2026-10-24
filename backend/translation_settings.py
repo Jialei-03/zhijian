@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import fcntl
 import json
+import logging
 import os
 import re
 import tempfile
@@ -505,7 +506,15 @@ def _complete(
         else:
             result = result_body["choices"][0]
             truncated = result.get("finish_reason") == "length"
-            text = result["message"]["content"]
+            # A reasoning model can end with no content at all (all thinking).
+            message = result.get("message") or {}
+            text = message.get("content")
+            if not truncated and not isinstance(text, str):
+                logging.getLogger(__name__).warning(
+                    "Answer without content: finish=%s keys=%s",
+                    result.get("finish_reason"),
+                    sorted(message),
+                )
         if truncated:
             raise ModelError("truncated", TRUNCATED)
         if isinstance(text, str):

@@ -8,8 +8,8 @@
   max-height: calc(100dvh - 2 * var(--ui-space-16));
   overflow-y: auto;
   box-sizing: border-box;
-  padding: var(--ui-space-4);
-  border-radius: var(--ui-r-12);
+  padding: var(--ui-space-6);
+  border-radius: var(--ui-r-16);
   background: var(--ui-elev);
   box-shadow: var(--ui-elev-2);
   outline: none;
@@ -31,11 +31,12 @@
   display: flex;
   align-items: center;
   gap: var(--ui-space-8);
-  height: var(--ui-control-md);
-  padding: 0 var(--ui-space-10);
+  flex-shrink: 0;
+  min-height: 34px;
+  padding: 5px var(--ui-space-10);
   border-radius: var(--ui-r-8);
-  color: var(--ui-fg-1);
-  font-size: var(--ui-text-13);
+  color: var(--ui-fg);
+  font-size: var(--ui-text-14);
   line-height: var(--ui-leading-tight);
   white-space: nowrap;
   cursor: pointer;
@@ -48,6 +49,11 @@
 
 .item svg {
   flex-shrink: 0;
+  color: var(--ui-fg-3);
+}
+
+.item:focus svg {
+  color: var(--ui-fg-1);
 }
 
 .label {
@@ -64,6 +70,10 @@
   color: var(--ui-fg);
   box-shadow: inset var(--ui-focus-ring);
   outline: none;
+}
+
+.item:active:not([aria-disabled="true"]) {
+  background: var(--ui-active);
 }
 
 /* After the rule above: a dangerous action keeps its color when it is current. */
@@ -86,7 +96,7 @@
 .separator {
   flex-shrink: 0;
   height: 1px;
-  margin: var(--ui-space-4) 0;
+  margin: var(--ui-space-4) var(--ui-space-6);
   background: var(--ui-edge-subtle);
 }
 

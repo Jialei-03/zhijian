@@ -197,7 +197,7 @@ def test_supervisor_gives_up_after_the_cap(tmp_path):
     from backend.local.supervisor import Supervisor, worker_health
 
     logs = []
-    sup = Supervisor(["no_such_worker"], tmp_path, log=logs.append, max_restarts=2, backoff=0.01, poll=0.02)
+    sup = Supervisor(["no_such_worker"], tmp_path, log_dir=tmp_path / "logs", log=logs.append, max_restarts=2, backoff=0.01, poll=0.02)
     sup.start()
     try:
         for _ in range(200):
@@ -208,6 +208,8 @@ def test_supervisor_gives_up_after_the_cap(tmp_path):
         assert any("restarting" in line for line in logs)
     finally:
         sup.stop()
+    output = (tmp_path / "logs" / "no_such_worker.log").read_text()
+    assert output.count("No module named") == 3
 
 
 def test_lock_helper_posix(tmp_path):

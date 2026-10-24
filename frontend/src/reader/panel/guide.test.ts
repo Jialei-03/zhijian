@@ -182,10 +182,43 @@ describe("guideView", () => {
     expect(
       guideView({
         ...known,
-        preparation: preparation({ status: "failed", error: "出错了" }),
+        preparation: preparation({
+          status: "failed",
+          guide_status: "failed",
+          error: "导读失败；第 2 页翻译失败；布局失败",
+        }),
         artifact: null,
       }),
-    ).toEqual({ kind: "failed", message: "出错了" });
+    ).toEqual({ kind: "failed", message: "" });
+  });
+
+  it("does not show translation or layout errors in a missing guide", () => {
+    expect(
+      guideView({
+        ...known,
+        preparation: preparation({
+          status: "failed",
+          guide_status: "waiting",
+          error: "第 2 页翻译失败；布局失败",
+        }),
+        artifact: null,
+      }),
+    ).toEqual({ kind: "idle", note: "", stopped: false });
+    expect(
+      guideView({
+        ...known,
+        preparation: preparation({
+          status: "failed",
+          guide_status: "failed",
+          error: "导读失败；第 2 页翻译失败",
+        }),
+        artifact: artifact({
+          id: "guide",
+          status: "failed",
+          error: "导读失败",
+        }),
+      }),
+    ).toEqual({ kind: "failed", message: "导读失败" });
   });
 
   it("offers to make a stopped guide anew", () => {

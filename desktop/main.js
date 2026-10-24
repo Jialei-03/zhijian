@@ -1,7 +1,16 @@
 // Open Research Agent as a desktop app: the local build (backend/local) runs in
 // the background and its pages show in this window. The interface is the same
 // one the browser and the hosted site show; only the frame is the app's.
-const { app, BrowserWindow, Menu, dialog, shell, net } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  Menu,
+  Notification,
+  ipcMain,
+  dialog,
+  shell,
+  net,
+} = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -35,6 +44,38 @@ let shared = false;
 let window = null;
 let quitting = false;
 let update = null;
+
+const reminded = new Map();
+ipcMain.on("team-reminder", (event, value) => {
+  if (
+    event.sender !== window?.webContents ||
+    !ours(event.senderFrame?.url || "") ||
+    !Notification.isSupported()
+  )
+    return;
+  if (
+    !value ||
+    typeof value.id !== "string" ||
+    typeof value.title !== "string" ||
+    typeof value.body !== "string" ||
+    typeof value.hash !== "string" ||
+    !/^team\/[\w-]+\/mentions$/.test(value.hash) ||
+    reminded.has(value.id)
+  )
+    return;
+  const notification = new Notification({
+    title: value.title,
+    body: value.body,
+  });
+  reminded.set(value.id, notification);
+  notification.on("click", () => {
+    show();
+    if (url) window?.loadURL(`${url.split("#")[0]}#${value.hash}`);
+  });
+  notification.on("failed", () => reminded.delete(value.id));
+  notification.on("close", () => reminded.set(value.id, null));
+  notification.show();
+});
 
 function log(text) {
   fs.mkdirSync(dataDir, { recursive: true });
@@ -176,8 +217,7 @@ function createWindow() {
   });
   guard(window.webContents);
   window.loadURL(
-    url ||
-      page("Open Research Agent", "<p>正在启动 Open Research Agent…</p>"),
+    url || page("Open Research Agent", "<p>正在启动 Open Research Agent…</p>"),
   );
 }
 
@@ -207,6 +247,11 @@ function guard(contents) {
     } else if (target === "ora:log") {
       event.preventDefault();
       shell.showItemInFolder(logFile);
+    } else if (target === "ora:logs") {
+      event.preventDefault();
+      const logs = path.join(dataDir, "logs");
+      fs.mkdirSync(logs, { recursive: true });
+      shell.openPath(logs);
     } else if (!ours(target) && !target.startsWith("data:")) {
       event.preventDefault();
       if (/^https?:|^mailto:/.test(target)) shell.openExternal(target);

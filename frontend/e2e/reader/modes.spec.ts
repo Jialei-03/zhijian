@@ -230,18 +230,17 @@ async function jumpTo(page: Page, number: number) {
   await expectAtTop(page, number);
 }
 
-/** A mode's item in a menu: the label, behind the mark that says whether it is the chosen one. */
+/** A mode's item exposes its selection without adding a mark to its label. */
 const modeItem = (menu: Locator, label: string) =>
-  menu.getByRole("menuitem", { name: new RegExp(`^[✓\\u2007\\s]*${label}$`) });
+  menu.getByRole("menuitemradio", { name: label, exact: true });
 
 const chosen = async (item: Locator) =>
-  (await item.textContent())?.trimStart().startsWith("✓");
+  (await item.getAttribute("aria-checked")) === "true";
 
 test("the strip has the reading modes, with the original chosen", async ({
   page,
 }) => {
   await open(page);
-
   await expect(modeSwitch(page).getByRole("radio")).toHaveText([
     "原文",
     "对照",
@@ -262,7 +261,12 @@ test("the translated view without a translation offers to make one, and starting
   await mode(page, "译文").click();
   await expect(mode(page, "译文")).toHaveAttribute("aria-checked", "true");
   await expect(layoutPanel(page)).toBeVisible();
-  await expect(layoutPanel(page).getByText("保留原有版面")).toBeVisible();
+  await expect(
+    layoutPanel(page).getByRole("region", { name: "版面翻译", exact: true }),
+  ).toContainText("未开始");
+  await expect(
+    layoutPanel(page).getByRole("button", { name: "开始版面翻译" }),
+  ).toBeEnabled();
   // The pages are not drawn behind it.
   await expect(pdfPage(page, 1)).toHaveCount(0);
 
@@ -290,9 +294,9 @@ test("the model chosen in the menu is the one the translation is made with", asy
   await menuButton(page).click();
   const items = page.getByRole("menu", { name: "翻译设置" });
   expect(
-    await chosen(items.getByRole("menuitem", { name: /Fixture model/ })),
+    await chosen(items.getByRole("menuitemradio", { name: /Fixture model/ })),
   ).toBe(true);
-  await items.getByRole("menuitem", { name: /Second model/ }).click();
+  await items.getByRole("menuitemradio", { name: /Second model/ }).click();
   await expect(items).toBeHidden();
 
   await mode(page, "译文").click();
@@ -311,9 +315,7 @@ test("a layout translation the service cannot make is said so", async ({
   await expect(
     layoutPanel(page).getByRole("region", { name: "版面翻译", exact: true }),
   ).toBeVisible();
-  await expect(
-    layoutPanel(page).getByText("这台服务还没有配置版面翻译"),
-  ).toBeVisible();
+  await expect(layoutPanel(page).getByText("未配置版面翻译")).toBeVisible();
   await expect(layoutPanel(page).getByRole("button")).toHaveCount(0);
 });
 
@@ -323,12 +325,10 @@ test("without a model the translated view says to add one in settings", async ({
   await open(page, { models: [] });
 
   await mode(page, "译文").click();
+  await expect(layoutPanel(page).getByText("未配置模型")).toBeVisible();
   await expect(
-    layoutPanel(page).getByText("先在设置里添加模型，才能翻译这篇论文。"),
-  ).toBeVisible();
-  await expect(
-    layoutPanel(page).getByRole("link", { name: "打开设置" }),
-  ).toHaveAttribute("href", "#settings");
+    layoutPanel(page).getByRole("link", { name: "添加模型" }),
+  ).toHaveAttribute("href", "#customize/models");
   // Nothing can be started without one.
   await expect(
     layoutPanel(page).getByRole("button", { name: "开始版面翻译" }),
@@ -454,10 +454,10 @@ test("对照 through the switch puts a column beside the page, translated as the
   const { fileId, service } = await open(page);
   const items = page.getByRole("menu", { name: "翻译设置" });
   await menuButton(page).click();
-  await items.getByRole("menuitem", { name: /译为 English/ }).click();
+  await items.getByRole("menuitemradio", { name: /译为 English/ }).click();
   await expect(items).toBeHidden();
   await menuButton(page).click();
-  await items.getByRole("menuitem", { name: /Second model/ }).click();
+  await items.getByRole("menuitemradio", { name: /Second model/ }).click();
   await expect(items).toBeHidden();
   // Nothing is translated page by page until 对照 is chosen.
   await page.waitForTimeout(500);
@@ -578,13 +578,13 @@ test("the language chosen in the menu is kept for the next visit", async ({
   await menuButton(page).click();
   const items = page.getByRole("menu", { name: "翻译设置" });
   // The interface is Chinese, so is the language to start with.
-  expect(await chosen(items.getByRole("menuitem", { name: /译为中文/ }))).toBe(
-    true,
-  );
   expect(
-    await chosen(items.getByRole("menuitem", { name: /译为 English/ })),
+    await chosen(items.getByRole("menuitemradio", { name: /译为中文/ })),
+  ).toBe(true);
+  expect(
+    await chosen(items.getByRole("menuitemradio", { name: /译为 English/ })),
   ).toBe(false);
-  await items.getByRole("menuitem", { name: /译为 English/ }).click();
+  await items.getByRole("menuitemradio", { name: /译为 English/ }).click();
   await expect(items).toBeHidden();
   expect(
     await page.evaluate(() =>
@@ -596,11 +596,11 @@ test("the language chosen in the menu is kept for the next visit", async ({
   await expect(pdfPage(page, 1)).toHaveAttribute("data-rendered", "true");
   await menuButton(page).click();
   expect(
-    await chosen(items.getByRole("menuitem", { name: /译为 English/ })),
+    await chosen(items.getByRole("menuitemradio", { name: /译为 English/ })),
   ).toBe(true);
-  expect(await chosen(items.getByRole("menuitem", { name: /译为中文/ }))).toBe(
-    false,
-  );
+  expect(
+    await chosen(items.getByRole("menuitemradio", { name: /译为中文/ })),
+  ).toBe(false);
 });
 
 // Where the strip is short of room, the reading modes are one menu; elsewhere a switch and a menu beside it.
@@ -646,7 +646,7 @@ for (const [width, compact] of [
     await within(button);
     await button.click();
     const items = page.getByRole("menu", { name: "翻译设置" });
-    await expect(items.getByRole("menuitem")).toHaveText([
+    await expect(items.getByRole("menuitemradio")).toHaveText([
       /原文/,
       /对照/,
       /译文/,
@@ -655,10 +655,10 @@ for (const [width, compact] of [
       /Fixture model/,
       /Second model/,
     ]);
-    expect(await chosen(items.getByRole("menuitem", { name: /原文/ }))).toBe(
-      true,
-    );
-    await items.getByRole("menuitem", { name: /译文/ }).click();
+    expect(
+      await chosen(items.getByRole("menuitemradio", { name: /原文/ })),
+    ).toBe(true);
+    await items.getByRole("menuitemradio", { name: /译文/ }).click();
     await expect(button).toHaveAccessibleName("阅读方式：译文");
     await expect(layoutPanel(page)).toBeVisible();
   });
@@ -683,10 +683,10 @@ test("where not even one button fits, the modes are in the more menu", async ({
   expect(await chosen(modeItem(items, "原文"))).toBe(true);
   await expect(modeItem(items, "对照")).toBeVisible();
   await expect(
-    items.getByRole("menuitem", { name: /译为 English/ }),
+    items.getByRole("menuitemradio", { name: /译为 English/ }),
   ).toBeVisible();
   await expect(
-    items.getByRole("menuitem", { name: /Second model/ }),
+    items.getByRole("menuitemradio", { name: /Second model/ }),
   ).toBeVisible();
   // The rest of the menu is still there.
   await expect(items.getByRole("menuitem", { name: "下载…" })).toBeVisible();

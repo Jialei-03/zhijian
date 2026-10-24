@@ -13,7 +13,7 @@ import {
 import { Floating } from "./Floating";
 import { Kbd } from "./Kbd";
 import styles from "./Menu.module.css";
-import { Tooltip } from "./Tooltip";
+import { RETURNED_FOCUS, Tooltip } from "./Tooltip";
 import type { Placement } from "./position";
 import { ariaKeyShortcuts, currentPlatformIsMac } from "./shortcut";
 
@@ -26,6 +26,8 @@ export type MenuEntry =
       id: string;
       label: string;
       icon?: LucideIcon;
+      /** An exclusive choice; the menu exposes its selection to assistive technology. */
+      checked?: boolean;
       /** Written as for `formatShortcut`; shown at the end of the row and announced. */
       shortcut?: string;
       danger?: boolean;
@@ -207,7 +209,8 @@ export function MenuList({
               ref={(element) => {
                 elements.current[index] = element;
               }}
-              role="menuitem"
+              role={entry.checked === undefined ? "menuitem" : "menuitemradio"}
+              aria-checked={entry.checked}
               tabIndex={-1}
               aria-disabled={entry.disabled ? true : undefined}
               aria-description={entry.hint}
@@ -296,7 +299,11 @@ export function Menu({
   const close = (returnFocus: boolean) => {
     // Before the list goes: the focus is then never on something that is leaving. After Tab, the
     // browser moves on from the button, to whatever follows it.
-    if (returnFocus) anchor?.focus();
+    if (returnFocus && anchor) {
+      anchor.setAttribute(RETURNED_FOCUS, "");
+      anchor.focus();
+      anchor.removeAttribute(RETURNED_FOCUS);
+    }
     setOpen(false);
   };
 

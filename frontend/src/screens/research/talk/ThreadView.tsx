@@ -88,6 +88,7 @@ export interface ThreadActions {
   busy: boolean;
   fork?(sprintId?: string): void;
   changed?(): void;
+  review?(sprintId?: string, path?: string): void;
 }
 
 export function ThreadView({
@@ -96,6 +97,7 @@ export function ThreadView({
   computes,
   actions,
   runs,
+  locateId,
 }: {
   items: ThreadItem[];
   project: ResearchProject;
@@ -103,6 +105,7 @@ export function ThreadView({
   actions: ThreadActions;
   /** Each round's run, by sprint: what it said and did, step by step. */
   runs: Map<string, ResearchRun>;
+  locateId?: string;
 }) {
   return (
     <>
@@ -130,6 +133,8 @@ export function ThreadView({
             return (
               <MessageItem
                 key={item.id}
+                id={item.id}
+                located={item.id === locateId}
                 who={item.who}
                 text={item.text}
                 at={item.at}
@@ -159,7 +164,7 @@ export function ThreadView({
           case "decision":
             return <DecisionCard key={item.id} item={item} actions={actions} />;
           case "work":
-            return (
+            const work = (
               <WorkBlock
                 key={item.id}
                 item={item}
@@ -168,6 +173,18 @@ export function ThreadView({
                 actions={actions}
                 run={runs.get(item.sprint.id)}
               />
+            );
+            return item.id === locateId ? (
+              <div
+                key={item.id}
+                className={styles.located}
+                data-research-item={item.id}
+                tabIndex={-1}
+              >
+                {work}
+              </div>
+            ) : (
+              work
             );
           default:
             return null;
@@ -221,12 +238,16 @@ export function MessageActions({
 }
 
 function MessageItem({
+  id,
+  located,
   who,
   text,
   at,
   sprintId,
   actions,
 }: {
+  id: string;
+  located: boolean;
   who: string;
   text: string;
   at: string;
@@ -235,7 +256,12 @@ function MessageItem({
 }) {
   if (who === "system") return <p className={styles.systemLine}>{text}</p>;
   return (
-    <div className={styles.message} data-human={who === "human" || undefined}>
+    <div
+      className={`${styles.message} ${located ? styles.located : ""}`}
+      data-research-item={id}
+      data-human={who === "human" || undefined}
+      tabIndex={-1}
+    >
       <div className={who === "human" ? styles.mine : styles.theirs}>
         {who === "human" ? text : <Prose text={text} />}
       </div>
@@ -684,7 +710,9 @@ export function RunCard({
   job,
   computes,
   actions,
+  compact = false,
 }: {
+  compact?: boolean;
   job: ResearchJob;
   computes: Compute[];
   actions: ThreadActions;
@@ -711,7 +739,9 @@ export function RunCard({
           <X size={13} aria-hidden />
         )}
       </span>
-      <span className={styles.runName}>{tag || plainCommand(job.command)}</span>
+      <span className={styles.runName}>
+        {compact ? plainCommand(job.command) : tag || plainCommand(job.command)}
+      </span>
       {main ? (
         <span className={styles.runMain}>
           <span>{main[0]}</span>
@@ -802,17 +832,17 @@ function WorkBlock({
           {run.runtime.rule.rule}
         </a>
       )}
+      {item.jobs.map((job) => (
+        <RunCard key={job.id} job={job} computes={computes} actions={actions} />
+      ))}
       {item.sprint.commit_sha && item.sprint.status !== "running" && (
         <CheckpointCard
           id={project.id}
           sprintId={item.sprint.id}
           refreshKey={project.updated_at + project.status}
-          onChanged={actions.changed}
+          onReview={(path) => actions.review?.(item.sprint.id, path)}
         />
       )}
-      {item.jobs.map((job) => (
-        <RunCard key={job.id} job={job} computes={computes} actions={actions} />
-      ))}
     </RunTurn>
   );
 }

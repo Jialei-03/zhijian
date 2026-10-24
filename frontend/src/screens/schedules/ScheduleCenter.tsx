@@ -13,6 +13,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { sidebarId } from "../../app/sidebar-entries";
 import { useI18n } from "../../i18n/I18nProvider";
 import { followLink } from "../../reader/route";
 import {
@@ -111,6 +112,7 @@ export function ScheduleNavigation({
         {items.map((item) => (
           <a
             key={item.id}
+            data-id={sidebarId("task")}
             href={`#${item.editor_url || `schedules/${item.id}`}`}
             onClick={followLink(go, item.editor_url || `schedules/${item.id}`)}
             aria-current={currentId === item.id ? "page" : undefined}

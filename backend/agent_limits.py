@@ -23,14 +23,16 @@ IMAGE_SIDE = 1800  # longest side of a picture, in pixels
 
 # Models whose thinking shares the output budget with the answer: a budget that
 # is too small cuts the answer off in the middle (a JSON guide, a long quiz).
-LARGE_OUTPUT = {"minimax-m3", "minimax-m3.1-flash-preview"}
+LARGE_OUTPUT = {"minimax-m3", "minimax-m3.1-flash"}
 OUTPUT_TOKENS = 8_192
 LARGE_OUTPUT_TOKENS = 32_768
 
 
 def output_tokens(config):
     """Most tokens one model call may produce for this model."""
-    large = config.get("model", "").lower() in LARGE_OUTPUT
+    from .model_options import model_key
+
+    large = model_key(config) in LARGE_OUTPUT
     return LARGE_OUTPUT_TOKENS if large else OUTPUT_TOKENS
 
 

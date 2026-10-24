@@ -907,6 +907,7 @@ def _member_definition(key):
 
 class TeamMember(Base):
     __tablename__ = "team_members"
+    paused: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     library_id: Mapped[str | None] = mapped_column(
         ForeignKey("member_library.id", name="fk_team_members_library", use_alter=True),
         nullable=True,
@@ -1006,6 +1007,57 @@ class TeamMessage(Base):
     source_key: Mapped[str | None] = mapped_column(
         String(100), nullable=True, unique=True
     )
+    created_at: Mapped[str] = mapped_column(String(40), default=now)
+
+
+class TeamMessageReaction(Base):
+    __tablename__ = "team_message_reactions"
+    # Legacy runs and research roots have virtual message IDs, too.
+    message_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("research_workspaces.id", ondelete="CASCADE"), index=True
+    )
+    member_id: Mapped[str] = mapped_column(
+        ForeignKey("team_members.id", ondelete="CASCADE"), primary_key=True
+    )
+    emoji: Mapped[str] = mapped_column(String(8), primary_key=True)
+    author_id: Mapped[str | None] = mapped_column(
+        ForeignKey("team_members.id"), nullable=True, index=True
+    )
+    excerpt: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[str] = mapped_column(String(40), default=now, index=True)
+
+
+class TeamMessageMark(Base):
+    __tablename__ = "team_message_marks"
+    __table_args__ = (UniqueConstraint("workspace_id", "message_id", "kind", "owner"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("research_workspaces.id"), index=True
+    )
+    channel_id: Mapped[str] = mapped_column(ForeignKey("team_channels.id"), index=True)
+    # Research and imported chat roots also have virtual message IDs.
+    message_id: Mapped[str] = mapped_column(String(80))
+    kind: Mapped[str] = mapped_column(String(16))
+    owner: Mapped[str] = mapped_column(String(36), default="")
+    completed: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[str] = mapped_column(String(40), default=now)
+
+
+class TeamReminder(Base):
+    __tablename__ = "team_reminders"
+    __table_args__ = (
+        Index("ix_team_reminders_due", "workspace_id", "delivered_at", "remind_at"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    owner: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("research_workspaces.id"))
+    channel_id: Mapped[str] = mapped_column(ForeignKey("team_channels.id"))
+    message_id: Mapped[str] = mapped_column(String(80))
+    thread_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    excerpt: Mapped[str] = mapped_column(Text, default="")
+    remind_at: Mapped[str] = mapped_column(String(40))
+    delivered_at: Mapped[str] = mapped_column(String(40), default="", server_default="")
     created_at: Mapped[str] = mapped_column(String(40), default=now)
 
 

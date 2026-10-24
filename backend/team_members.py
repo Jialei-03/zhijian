@@ -5,6 +5,7 @@ Deleted instances remain as historical message/rule references.
 """
 
 from uuid import uuid4
+from typing import Literal
 
 from pydantic import ConfigDict, Field, field_validator
 from sqlalchemy import select
@@ -40,6 +41,7 @@ class MemberConfig(Strict):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
     name: str = Field(min_length=1, max_length=100)
     avatar_color: str = "blue"
+    avatar: str | None = None
     role_description: str = Field(default="", max_length=50000)
     model_config_id: str = Field(default="", max_length=64)
     permissions: Permissions = Field(default_factory=Permissions)
@@ -61,7 +63,13 @@ class MemberConfig(Strict):
         return value
 
 
+class AvatarUpload(Strict):
+    extension: Literal["png", "jpg", "jpeg", "webp", "svg"]
+    content: str
+
+
 class MemberCreate(Strict):
+    avatar_upload: AvatarUpload | None = None
     source: str | None = Field(default=None, max_length=150000)
     config: MemberConfig | None = None
     library_id: str | None = None
@@ -70,6 +78,8 @@ class MemberCreate(Strict):
 
 
 class MemberEdit(Strict):
+    paused: bool | None = None
+    avatar_upload: AvatarUpload | None = None
     source: str | None = Field(default=None, max_length=150000)
     revision: str | None = None
     restore_builtin: bool = False
@@ -170,6 +180,38 @@ def file_out(member):
         "revision": revision(raw),
         "file_path": member.file_path,
         "file_error": getattr(member, "_file_error", ""),
+        "builtin_update_available": getattr(member, "_builtin_update_available", False),
+    }
+
+
+def avatar_out(member, owner):
+    from pathlib import Path
+    from . import agent_files as files
+    from .research_team import ROLES
+
+    avatar = config(member)["avatar"]
+    url = None
+    if member.role != "human" and files.settings_of(member):
+        try:
+            path = files.avatar_path(
+                files.member_root(files.settings_of(member), member), avatar
+            )
+            if path:
+                stamp = str(path.stat().st_mtime_ns) if path.is_file() else "missing"
+                url = f"/api/v1/research/workspaces/{member.workspace_id}/team/members/{member.id}/avatar?v={stamp}"
+        except (OSError, ValueError):
+            pass
+    return {
+        "avatar_url": url,
+        "avatar_seed": (
+            owner
+            if member.role == "human"
+            else (
+                member.role
+                if member.role in ROLES
+                else Path(member.file_path or member.name).stem
+            )
+        ),
     }
 
 
@@ -246,7 +288,7 @@ def create(d, workspace, body):
     if channel_ids and body.source is None:
         values["channels"] = files.channels_for(d, member, channel_ids)
         original = files.render(values, original)
-    files.save_member(member, original, workspace.owner)
+    files.save_member(member, original, workspace.owner, upload=body.avatar_upload)
     files.atomic_write(
         files.state_path(files.settings_of(member), member.id, "base.md"),
         files.read_library(library)[0],
@@ -268,6 +310,10 @@ def edit(d, workspace, member, body):
 
     if member.role == "human":
         raise ValueError("研究者不可编辑 / Researcher cannot be edited")
+    if body.paused is not None:
+        member.paused = body.paused
+    if body.model_fields_set == {"paused"}:
+        return
     current = file_out(member)
     check_revision(current["source"], body.revision)
     original, values = files.read_member(member)
@@ -278,8 +324,9 @@ def edit(d, workspace, member, body):
         files.atomic_write(
             files.state_path(files.settings_of(member), member.id, "base.md"), original
         )
-    if body.restore_builtin and not member.library_id:
-        original = (files.BUILTINS / f"{member.role}.md").read_text(encoding="utf-8")
+    restore = body.restore_builtin and files.builtin_file(member) is not None
+    if restore:
+        original = files.builtin_file(member).read_bytes().decode("utf-8")
         values = files.parse(original, member.role)
     if body.source is not None:
         original, values = body.source, files.parse(body.source, member.role)
@@ -293,13 +340,15 @@ def edit(d, workspace, member, body):
         values["enabled"] = body.enabled
     source = (
         original
-        if body.source is not None
+        if (body.source is not None or restore)
         and not body.config
         and body.enabled is None
         and body.subscriptions is None
         else files.render(values, original, member.role)
     )
-    files.save_member(member, source, workspace.owner)
+    files.save_member(
+        member, source, workspace.owner, upload=body.avatar_upload, builtin=restore
+    )
     for channel in d.scalars(
         select(TeamChannel).where(TeamChannel.member_id == member.id)
     ):
@@ -373,6 +422,7 @@ def sync_library(d, row, body):
                 "channels",
                 "budget",
                 "color",
+                "avatar",
                 "readonly",
                 "file_readonly",
                 "enabled",
@@ -550,6 +600,9 @@ def apply_runtime(d, run, payload, info, settings=None):
     if not brief.startswith(role_text):
         brief = role_text + "\n\n" + brief
     payload["context"] = language + brief
+    from .team_message_features import refresh_feedback
+
+    payload["context"] = refresh_feedback(d, member, payload["context"])
     from .team_budgets import snapshot
 
     run.runtime = {**run.runtime, **snapshot(member)}

@@ -13,12 +13,21 @@ LABELS.update(
     team_read_channel="读频道",
     team_read_thread="读线程",
     team_overview="读团队",
+    team_set_status="设置状态",
     team_review_result="提交评审",
     team_wait_for_owner="等负责人",
     team_search_papers="学术检索",
     team_import_paper="导入论文",
 )
 TEXT = {"type": "string", "maxLength": 12000}
+READ_PAGE = {
+    "after": {
+        "type": "string",
+        "description": "Message ID or timezone-aware timestamp.",
+    },
+    "limit": {"type": "integer", "minimum": 1},
+    "max_chars": {"type": "integer", "minimum": 1},
+}
 TEAM_TOOLS = [
     tool(
         "team_search_papers",
@@ -49,16 +58,24 @@ TEAM_TOOLS = [
     ),
     tool(
         "team_send_message",
-        "Send a message to a channel or thread in this team. Members named in `to` are woken to act on it; @Name in text only refers to someone. Omit channel_id/thread_id to reply here.",
+        "Send a message to a channel or thread in this team. `wake` wakes the named members. @Name in text refers to someone without waking them. Omitted channel_id/thread_id reply here. also_channel=true also posts a thread reply to its channel.",
         {
             "text": TEXT,
-            "to": {"type": "array", "items": {"type": "string"}},
+            "wake": {"type": "array", "items": {"type": "string"}},
+            # Older agent files still say `to`.
+            "to": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Same as wake.",
+            },
             "kind": {
                 "type": "string",
                 "enum": ["text", "result", "plan", "conclusion", "draft", "review"],
             },
             "channel_id": {"type": "string"},
             "thread_id": {"type": "string"},
+            "also_channel": {"type": "boolean"},
+            "done_when": {"type": "string", "description": "完成的标准，可选"},
         },
         ["text"],
         write=True,
@@ -71,15 +88,26 @@ TEAM_TOOLS = [
         write=True,
     ),
     tool(
+        "team_set_status",
+        "Set this member's one-line display status for the current run without waking anyone. Empty text clears it.",
+        {"text": {"type": "string", "maxLength": 80}},
+        ["text"],
+        write=True,
+    ),
+    tool(
         "team_read_channel",
-        "Read recent messages in a team channel.",
-        {"channel_id": {"type": "string"}},
+        "Read attributed messages and files in a team channel, without execution traces. Returns a continuation cursor when more messages remain. limit defaults to 50; max_chars defaults to 24000.",
+        {"channel_id": {"type": "string"}, **READ_PAGE},
         ["channel_id"],
     ),
     tool(
         "team_read_thread",
-        "Read a thread, including its research map and rounds.",
-        {"channel_id": {"type": "string"}, "thread_id": {"type": "string"}},
+        "Read attributed messages and files in a thread, including its root, without execution traces. Returns a continuation cursor when more messages remain. limit defaults to 50; max_chars defaults to 24000.",
+        {
+            "channel_id": {"type": "string"},
+            "thread_id": {"type": "string"},
+            **READ_PAGE,
+        },
         ["channel_id", "thread_id"],
     ),
     tool("team_overview", "Read team members, channels, research and budgets."),
@@ -116,7 +144,7 @@ def definitions(role, all_tools, member=None):
 
 
 def _call(app, owner, info, name, args):
-    from .research_chat import overview, read_research
+    from .research_chat import overview
 
     with app.state.maker() as d:
         workspace = d.get(ResearchWorkspace, info["workspace_id"])
@@ -134,6 +162,27 @@ def _call(app, owner, info, name, args):
             d, workspace, args.get("channel_id") or info["channel_id"]
         )
         thread_id = args.get("thread_id")
+        if name == "team_set_status":
+            text = args.get("text")
+            if (
+                not isinstance(text, str)
+                or len(text) > 80
+                or (text and text.splitlines() != [text])
+            ):
+                raise ValueError(
+                    "状态须为不超过 80 字符的一行文字 / Status must be one line of at most 80 characters"
+                )
+            run = d.get(AgentRun, info["run_id"])
+            if (
+                not run
+                or run.owner != owner
+                or run.status != "running"
+                or ((run.runtime or {}).get("team", {}).get("member_id") != member.id)
+            ):
+                raise ValueError("成员不能设置这个状态 / Status unavailable to member")
+            run.runtime = {**run.runtime, "team_status": text.strip()}
+            d.commit()
+            return {"status_text": text.strip()}
         if name == "team_search_papers":
             from .academic_search import search
             from .models import DiscoveryCandidate
@@ -218,6 +267,11 @@ def _call(app, owner, info, name, args):
                 )
             )
             text = team.normalize(args["text"]).strip()
+            also_channel = name == "team_send_message" and args.get(
+                "also_channel", False
+            )
+            if also_channel:
+                team.validate_broadcast(channel, thread_id)
             if not text or len(text) > 12000:
                 raise ValueError("消息为空或过长 / Empty or oversized message")
             response = d.scalar(
@@ -225,12 +279,39 @@ def _call(app, owner, info, name, args):
                     TeamMessage.source_key == f"run:{info['run_id']}"
                 )
             )
+            incoming = (
+                d.get(TeamMessage, info.get("message_id"))
+                if info.get("message_id")
+                else None
+            )
+            done_when = team.normalize(
+                args.get(
+                    "done_when",
+                    (
+                        response.data if response else incoming.data if incoming else {}
+                    ).get("done_when", ""),
+                )
+            ).strip()
             kind = (
                 "conclusion"
                 if name == "team_wait_for_owner"
                 else args.get("kind", "text")
             )
-            to = team.addressed(d, workspace, args.get("to") or [], member)
+            # `to` is the former name of `wake`.
+            to = [
+                i
+                for i in team.addressed(
+                    d, workspace, args.get("wake") or args.get("to") or [], member
+                )
+                if d.get(TeamMember, i).role != "human"
+            ]
+            paused = [
+                d.get(TeamMember, i).name for i in to if d.get(TeamMember, i).paused
+            ]
+            if paused:
+                raise ValueError(
+                    "、".join(paused) + " 暂停中 / " + ", ".join(paused) + " is paused"
+                )
             if response and (channel.id, thread_id) == (
                 info["channel_id"],
                 info.get("thread_id"),
@@ -242,6 +323,7 @@ def _call(app, owner, info, name, args):
                     "routing_scope": info.get("routing_scope"),
                     "waiting": name == "team_wait_for_owner",
                     "to": list(dict.fromkeys([*response.data.get("to", []), *to])),
+                    "done_when": done_when,
                 }
                 if name == "team_wait_for_owner":
                     response.mentions = []
@@ -249,6 +331,8 @@ def _call(app, owner, info, name, args):
 
                     route_message(d, workspace, response, trigger="conclusion_proposed")
                     response.data = {**response.data, "routed": True}
+                if also_channel:
+                    team.broadcast_reply(d, workspace, channel, response)
                 d.commit()
                 return {"message_id": response.id}
             message = team.post(
@@ -259,10 +343,12 @@ def _call(app, owner, info, name, args):
                 thread_id=thread_id,
                 author=member,
                 kind=kind,
+                also_channel=also_channel,
                 data={
                     "routing_scope": info.get("routing_scope"),
                     "waiting": name == "team_wait_for_owner",
                     "to": to,
+                    "done_when": done_when,
                 },
             )
             if response and (channel.id, thread_id) != (
@@ -281,21 +367,24 @@ def _call(app, owner, info, name, args):
             d.commit()
             return {"message_id": message.id}
         if name == "team_overview":
-            return team.overview(d, workspace) | {
+            result = team.overview(d, workspace, include_reminders=False) | {
                 "research": overview(d, workspace, app.state.settings)
             }
-        result = team.history(
-            d, workspace, channel, thread_id if name == "team_read_thread" else None
+            from .team_member_context import member_message
+
+            result["notifications"] = [
+                member_message(d, message) for message in result["notifications"]
+            ]
+            return result
+        from .team_member_context import read_messages
+
+        return read_messages(
+            d,
+            workspace,
+            channel,
+            thread_id if name == "team_read_thread" else None,
+            **{key: args[key] for key in READ_PAGE if key in args},
         )
-        result["messages"] = result["messages"][-50:]
-        if result["research_id"]:
-            result["research"] = read_research(
-                d,
-                {"workspace_id": workspace.id},
-                result["research_id"],
-                app.state.settings,
-            )
-        return result
 
 
 async def execute(app, owner, run_id, name, args):

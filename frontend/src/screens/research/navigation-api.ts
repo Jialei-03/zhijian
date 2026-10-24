@@ -48,6 +48,7 @@ export interface FolderListing {
   path: string;
   parent: string | null;
   entries: { name: string; path: string }[];
+  project_error: "" | "root" | "home" | "system" | "personal" | "git";
 }
 
 export const readNavigation = () =>
@@ -55,10 +56,12 @@ export const readNavigation = () =>
 export const createPhysicalWorkspace = (
   name: string,
   location: WorkspaceLocation,
+  createFolder = false,
 ) =>
   send("/research/workspaces", {
     name,
     location,
+    ...(createFolder ? { create_folder: true } : {}),
   }) as Promise<NavigationWorkspace>;
 export const createCollection = (name: string, description = "") =>
   send("/research/collections", {

@@ -1,28 +1,52 @@
 import {
   Background,
+  BaseEdge,
+  EdgeLabelRenderer,
   Handle,
   MarkerType,
   Position,
   ReactFlow,
   ReactFlowProvider,
+  useNodesInitialized,
   useReactFlow,
+  type EdgeProps,
   type NodeProps,
 } from "@xyflow/react";
 import {
   Clock3,
   Hash,
+  LayoutGrid,
   MessageSquare,
   Plus,
   Scan,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { Button, Dialog, IconButton } from "../../../ui";
+import { MemberAvatar } from "../MemberEditor";
+import {
+  layoutWorkflow,
+  curvePath,
+  curveWorkflowEdges,
+  workflowViewport,
+  WORKFLOW_MIN_ZOOM,
+  savedNodeIds,
+} from "./workflow-layout";
 import {
   connectionToRule,
-  edgeToRule,
+  edgeRules,
+  mergeWorkflowEdges,
+  workflowEdgeLabel,
   layoutFromNodes,
   newRule,
   nodeId,
@@ -53,9 +77,11 @@ function CanvasNode({ data }: NodeProps<WorkflowNode>) {
   const name =
     data.kind === "owner" || data.human
       ? t("teamWorkflow.me")
-      : data.kind === "trigger"
-        ? data.name || t(`teamWorkflow.event.${data.event ?? "message"}`)
-        : data.name;
+      : data.kind === "author"
+        ? t("teamWorkflow.originalAuthor")
+        : data.kind === "trigger"
+          ? data.name || t(`teamWorkflow.event.${data.event ?? "message"}`)
+          : data.name;
   return (
     <div
       className={`${styles.node} ${data.kind === "channel" ? styles.channelNode : ""} ${data.kind === "trigger" ? styles.triggerNode : ""}`}
@@ -70,36 +96,94 @@ function CanvasNode({ data }: NodeProps<WorkflowNode>) {
       ) : data.kind === "channel" ? (
         <Hash size={16} aria-hidden />
       ) : (
-        <span className={styles.avatar} aria-hidden>
-          {Array.from(name).slice(0, 2).join("")}
-        </span>
+        <MemberAvatar
+          member={data.member}
+          seed={data.member?.avatar_seed ?? data.ref}
+          size="sm"
+        />
       )}
       <span className={styles.nodeName}>{name}</span>
       {data.status && (
-        <span className={styles.nodeStatus} data-status={data.status}>
-          <i aria-hidden />
-          {t(`teamWorkflow.status.${data.status}`)}
-        </span>
+        <span
+          className={styles.nodeStatus}
+          data-status={data.status}
+          role="status"
+          aria-label={t(`teamWorkflow.status.${data.status}`)}
+        />
       )}
       <Handle type="source" position={Position.Right} id="out" />
       <Handle
         type="source"
         position={Position.Bottom}
-        id="return-out"
+        id="back-out"
         isConnectable={false}
-        className={styles.returnOut}
+        className={styles.backHandle}
       />
       <Handle
         type="target"
         position={Position.Bottom}
-        id="return-in"
+        id="back-in"
         isConnectable={false}
-        className={styles.returnIn}
+        className={styles.backHandle}
+      />
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="loop-out"
+        isConnectable={false}
+        className={styles.loopOut}
+      />
+      <Handle
+        type="target"
+        position={Position.Bottom}
+        id="loop-in"
+        isConnectable={false}
+        className={styles.loopIn}
       />
     </div>
   );
 }
 const nodeTypes = { workflow: CanvasNode };
+
+function CanvasEdge({
+  id,
+  data,
+  label,
+  markerEnd,
+  style,
+}: EdgeProps<WorkflowEdge>) {
+  const openEdge = useContext(EdgeOpen);
+  const curve = data?.curve;
+  if (!curve) return null;
+  return (
+    <>
+      <BaseEdge
+        id={id}
+        path={curvePath(curve.points)}
+        markerEnd={markerEnd}
+        style={style}
+      />
+      {label && (
+        <EdgeLabelRenderer>
+          {/* Above the nodes, so a label is never hidden or unclickable. */}
+          <button
+            type="button"
+            className={`${styles.edgeLabel} nodrag nopan`}
+            data-edge-label={id}
+            style={{
+              transform: `translate(-50%, -50%) translate(${curve.label.x}px, ${curve.label.y}px)`,
+            }}
+            onClick={() => openEdge(id)}
+          >
+            {label}
+          </button>
+        </EdgeLabelRenderer>
+      )}
+    </>
+  );
+}
+const EdgeOpen = createContext<(id: string) => void>(() => {});
+const edgeTypes = { workflow: CanvasEdge };
 
 function Canvas({
   workflow,
@@ -119,9 +203,63 @@ function Canvas({
     [workflow, members, channels],
   );
   const [nodes, setNodes] = useState(graph.nodes);
+  const initialized = useNodesInitialized();
+  const measurements = nodes
+    .map(
+      (node) => `${node.id}:${node.measured?.width}:${node.measured?.height}`,
+    )
+    .join(";");
+  const measured =
+    initialized &&
+    nodes.length === graph.nodes.length &&
+    graph.nodes.every((expected) =>
+      nodes.some(
+        (node) =>
+          node.id === expected.id &&
+          node.measured?.width &&
+          node.measured.height,
+      ),
+    );
+  const firstLayout = useRef<string | null>(null);
+  const [fitPending, setFitPending] = useState(false);
+  const canvas = useRef<HTMLDivElement>(null);
   const [selected, setSelected] = useState<WorkflowNode | null>(null);
+  const [selectedRules, setSelectedRules] = useState<WorkflowRule[]>([]);
+  const openEdge = (edge: WorkflowEdge) => {
+    const rules = edgeRules(edge, workflow);
+    if (rules.length === 1) onEdit(rules[0]);
+    else if (rules.length) setSelectedRules(rules);
+  };
   const [fired, setFired] = useState<Set<string>>(new Set());
-  useEffect(() => setNodes(graph.nodes), [graph.nodes]);
+  useEffect(() => {
+    setNodes((previous) =>
+      layoutWorkflow(
+        graph.nodes.map((node) => ({
+          ...node,
+          measured: previous.find((item) => item.id === node.id)?.measured,
+        })),
+        graph.edges,
+        savedNodeIds(workflow),
+      ),
+    );
+  }, [graph]);
+  useEffect(() => {
+    if (!measured) return;
+    setNodes((nodes) => {
+      const next = layoutWorkflow(nodes, graph.edges, savedNodeIds(workflow));
+      return next.some(
+        (node, index) =>
+          node.position.x !== nodes[index].position.x ||
+          node.position.y !== nodes[index].position.y,
+      )
+        ? next
+        : nodes;
+    });
+    if (firstLayout.current !== workflow.id) {
+      firstLayout.current = workflow.id;
+      setFitPending(true);
+    }
+  }, [measured, workflow, graph.edges, measurements]);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
     const update = () => {
@@ -136,25 +274,33 @@ function Canvas({
     update();
     return () => clearTimeout(timer);
   }, [runtime?.fired]);
-  const edges = graph.edges.map((edge) => {
-    const rule = edgeToRule(edge, workflow)!;
-    const kind = edge.data!.kind;
-    const active = rule.enabled && fired.has(rule.id);
-    const label = t(
-      kind === "return"
-        ? "teamWorkflow.return"
-        : kind === "subscription"
-          ? "teamWorkflow.subscription"
-          : kind === "schedule"
-            ? "teamWorkflow.event.schedule"
-            : `teamWorkflow.action.${kind}`,
+  const groupedEdges = useMemo(
+    () => mergeWorkflowEdges(graph.edges),
+    [graph.edges],
+  );
+  const curves = useMemo(
+    () => curveWorkflowEdges(nodes, groupedEdges),
+    [nodes, groupedEdges],
+  );
+  const edges = groupedEdges.map((edge) => {
+    const rules = edgeRules(edge, workflow);
+    const enabled = rules.some((rule) => rule.enabled);
+    const active = rules.some((rule) => rule.enabled && fired.has(rule.id));
+    const label = workflowEdgeLabel(edge, t);
+    const curve = curves.get(edge.id);
+    const returning = edge.data!.rules!.every(
+      (entry) => entry.kind === "return",
     );
     return {
       ...edge,
+      type: "workflow",
+      sourceHandle: curve?.sourceHandle,
+      targetHandle: curve?.targetHandle,
       label,
-      ariaLabel: `${label}: ${ruleSummary(rule, members, channels, t)}`,
+      data: { ...edge.data!, curve },
+      ariaLabel: `${label}: ${rules.map((rule) => ruleSummary(rule, members, channels, t)).join("; ")}`,
       animated: active,
-      className: `${active ? styles.fired : ""} ${!rule.enabled ? styles.paused : ""} ${kind === "return" ? styles.returnEdge : ""}`,
+      className: `${active ? styles.fired : ""} ${!enabled ? styles.paused : ""} ${returning ? styles.returnEdge : ""}`,
       markerEnd: {
         type: MarkerType.ArrowClosed,
         color: active ? "var(--ui-success-text)" : "var(--ui-fg-2)",
@@ -167,12 +313,24 @@ function Canvas({
           ) {
             event.preventDefault();
             event.stopPropagation();
-            onEdit(rule);
+            openEdge(edge);
           }
         },
       },
     };
   });
+  const fitCanvas = useCallback(() => {
+    if (!canvas.current) return;
+    const { width, height } = canvas.current.getBoundingClientRect();
+    void flow.setViewport(
+      workflowViewport(nodes, width, height, curves.values()),
+    );
+  }, [nodes, flow, curves]);
+  useEffect(() => {
+    if (!fitPending || !initialized) return;
+    fitCanvas();
+    setFitPending(false);
+  }, [fitPending, initialized, fitCanvas]);
   const addNode = (
     target: WorkflowNodeTarget,
     position = flow.screenToFlowPosition({
@@ -209,7 +367,9 @@ function Canvas({
   const entityName =
     selected?.data.kind === "owner"
       ? t("teamWorkflow.me")
-      : (selected?.data.name ?? "");
+      : selected?.data.kind === "author"
+        ? t("teamWorkflow.originalAuthor")
+        : (selected?.data.name ?? "");
   return (
     <div className={styles.canvasLayout}>
       <aside
@@ -228,33 +388,68 @@ function Canvas({
             {(kind === "member"
               ? members
               : channels.filter((c) => c.kind !== "dm")
-            ).map((entity) => (
-              <Button
-                key={entity.id}
-                variant="ghost"
-                icon={kind === "channel" ? Hash : Plus}
-                draggable={!readOnly}
-                aria-label={t("teamWorkflow.addNode", { name: entity.name })}
-                disabled={
-                  readOnly ||
-                  nodes.some((node) => node.id === nodeId(kind, entity.id))
-                }
-                onClick={() => addNode({ kind, id: entity.id })}
-                onDragStart={(event) => {
-                  event.dataTransfer.setData(
-                    DRAG_TYPE,
-                    JSON.stringify({ kind, id: entity.id }),
-                  );
-                  event.dataTransfer.effectAllowed = "copy";
-                }}
-              >
-                {entity.name}
-              </Button>
-            ))}
+            ).map((entity) => {
+              const placed = nodes.some(
+                (node) => node.id === nodeId(kind, entity.id),
+              );
+              return (
+                <Button
+                  key={entity.id}
+                  variant="ghost"
+                  className={styles.paletteItem}
+                  data-placed={placed}
+                  draggable={!readOnly && !placed}
+                  aria-label={
+                    placed
+                      ? entity.name
+                      : t("teamWorkflow.addNode", { name: entity.name })
+                  }
+                  disabled={readOnly && !placed}
+                  onClick={() =>
+                    placed
+                      ? openNode(
+                          nodes.find(
+                            (node) => node.id === nodeId(kind, entity.id),
+                          )!,
+                        )
+                      : addNode({ kind, id: entity.id })
+                  }
+                  onDragStart={(event) => {
+                    if (placed || readOnly) {
+                      event.preventDefault();
+                      return;
+                    }
+                    event.dataTransfer.setData(
+                      DRAG_TYPE,
+                      JSON.stringify({ kind, id: entity.id }),
+                    );
+                    event.dataTransfer.effectAllowed = "copy";
+                  }}
+                >
+                  <span className={styles.paletteContent}>
+                    <span className={styles.paletteIcon}>
+                      {!placed ? (
+                        <Plus size={16} aria-hidden />
+                      ) : kind === "channel" ? (
+                        <Hash size={16} aria-hidden />
+                      ) : (
+                        <MemberAvatar
+                          member={entity}
+                          seed={entity.id}
+                          size="sm"
+                        />
+                      )}
+                    </span>
+                    <span className={styles.paletteName}>{entity.name}</span>
+                  </span>
+                </Button>
+              );
+            })}
           </div>
         ))}
       </aside>
       <div
+        ref={canvas}
         className={styles.canvas}
         data-testid="workflow-canvas"
         onKeyDownCapture={(event) => {
@@ -309,120 +504,142 @@ function Canvas({
                 : item,
             );
             setNodes(next);
-            onChange(layoutFromNodes(workflow, next));
+            onChange(
+              layoutFromNodes(
+                workflow,
+                next.filter((item) => item.id === node.id),
+              ),
+            );
           }
         }}
       >
-        <ReactFlow<WorkflowNode, WorkflowEdge>
-          nodes={nodes.map((node) => ({
-            ...node,
-            draggable: readOnly ? false : node.draggable,
-            connectable: !readOnly,
-            ariaLabel:
-              node.data.kind === "trigger"
-                ? `${t(`teamWorkflow.event.${node.data.event ?? "message"}`)} ${node.data.name}`
-                : node.data.kind === "owner" || node.data.human
-                  ? t("teamWorkflow.me")
-                  : node.data.name,
-            data: {
-              ...node.data,
-              status:
-                node.data.kind === "member"
-                  ? (runtime?.members[node.data.ref] ?? "idle")
-                  : undefined,
-            },
-          }))}
-          edges={edges}
-          nodeTypes={nodeTypes}
-          fitView
-          minZoom={0.25}
-          maxZoom={2}
-          nodesFocusable
-          nodesDraggable={!readOnly}
-          nodesConnectable={!readOnly}
-          edgesFocusable
-          connectOnClick
-          deleteKeyCode={null}
-          colorMode="system"
-          onNodesChange={(changes) => {
-            setNodes(
-              updateCanvasNodes(
-                workflow,
-                nodes,
-                changes,
-                readOnly ? () => undefined : onChange,
-              ),
-            );
-          }}
-          onConnect={(connection) => {
-            if (readOnly) return;
-            const rule = connectionToRule(
-              connection,
-              nodes,
-              `r-${crypto.randomUUID()}`,
-            );
-            if (rule) onCreate(rule);
-          }}
-          isValidConnection={(connection) =>
-            !!connectionToRule(
-              {
-                ...connection,
-                sourceHandle: connection.sourceHandle ?? null,
-                targetHandle: connection.targetHandle ?? null,
-              },
-              nodes,
-              "draft",
-            )
-          }
-          onNodeClick={(_, node) => openNode(node)}
-          onEdgeClick={(_, edge) => {
-            const rule = edgeToRule(edge, workflow);
-            if (rule) onEdit(rule);
-          }}
-          onDragOver={(event) => {
-            if (event.dataTransfer.types.includes(DRAG_TYPE)) {
-              event.preventDefault();
-              event.dataTransfer.dropEffect = "copy";
-            }
-          }}
-          onDrop={(event) => {
-            event.preventDefault();
-            if (readOnly) return;
-            try {
-              const value: unknown = JSON.parse(
-                event.dataTransfer.getData(DRAG_TYPE),
-              );
-              if (
-                value &&
-                typeof value === "object" &&
-                "kind" in value &&
-                "id" in value &&
-                (value.kind === "member" || value.kind === "channel") &&
-                typeof value.id === "string"
-              )
-                addNode(
-                  { kind: value.kind, id: value.id },
-                  flow.screenToFlowPosition({
-                    x: event.clientX,
-                    y: event.clientY,
-                  }),
-                );
-            } catch {
-              /* Ignore unrelated or malformed drag payloads. */
-            }
-          }}
-          aria-label={t("teamWorkflow.canvas")}
-          ariaLabelConfig={{
-            "node.a11yDescription.default": t("teamWorkflow.nodeKeyboard"),
-            "node.a11yDescription.keyboardDisabled": t(
-              "teamWorkflow.nodeKeyboard",
-            ),
-            "edge.a11yDescription.default": t("teamWorkflow.edgeKeyboard"),
+        <EdgeOpen.Provider
+          value={(id) => {
+            const target = edges.find((e) => e.id === id);
+            if (target) openEdge(target);
           }}
         >
-          <Background color="var(--ui-edge)" />
-        </ReactFlow>
+          <ReactFlow<WorkflowNode, WorkflowEdge>
+            nodes={nodes.map((node) => ({
+              ...node,
+              draggable: readOnly ? false : node.draggable,
+              connectable: !readOnly,
+              ariaLabel:
+                node.data.kind === "trigger"
+                  ? `${t(`teamWorkflow.event.${node.data.event ?? "message"}`)} ${node.data.name}`
+                  : node.data.kind === "owner" || node.data.human
+                    ? t("teamWorkflow.me")
+                    : node.data.kind === "author"
+                      ? t("teamWorkflow.originalAuthor")
+                      : node.data.name,
+              data: {
+                ...node.data,
+                status:
+                  node.data.kind === "member"
+                    ? (runtime?.members[node.data.ref] ?? "idle")
+                    : undefined,
+              },
+            }))}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            minZoom={WORKFLOW_MIN_ZOOM}
+            maxZoom={2}
+            nodesFocusable
+            nodesDraggable={!readOnly}
+            nodesConnectable={!readOnly}
+            edgesFocusable
+            connectOnClick
+            deleteKeyCode={null}
+            colorMode="system"
+            onNodesChange={(changes) => {
+              setNodes(
+                updateCanvasNodes(
+                  workflow,
+                  nodes,
+                  changes,
+                  readOnly ? () => undefined : onChange,
+                ),
+              );
+            }}
+            onConnect={(connection) => {
+              if (readOnly) return;
+              const rule = connectionToRule(
+                connection,
+                nodes,
+                `r-${crypto.randomUUID()}`,
+              );
+              if (rule) onCreate(rule);
+            }}
+            isValidConnection={(connection) =>
+              !!connectionToRule(
+                {
+                  ...connection,
+                  sourceHandle: connection.sourceHandle ?? null,
+                  targetHandle: connection.targetHandle ?? null,
+                },
+                nodes,
+                "draft",
+              )
+            }
+            onNodeClick={(_, node) => openNode(node)}
+            onEdgeClick={(_, edge) => openEdge(edge)}
+            onDragOver={(event) => {
+              if (event.dataTransfer.types.includes(DRAG_TYPE)) {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+              }
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              if (readOnly) return;
+              try {
+                const value: unknown = JSON.parse(
+                  event.dataTransfer.getData(DRAG_TYPE),
+                );
+                if (
+                  value &&
+                  typeof value === "object" &&
+                  "kind" in value &&
+                  "id" in value &&
+                  (value.kind === "member" || value.kind === "channel") &&
+                  typeof value.id === "string"
+                )
+                  addNode(
+                    { kind: value.kind, id: value.id },
+                    flow.screenToFlowPosition({
+                      x: event.clientX,
+                      y: event.clientY,
+                    }),
+                  );
+              } catch {
+                /* Ignore unrelated or malformed drag payloads. */
+              }
+            }}
+            aria-label={t("teamWorkflow.canvas")}
+            ariaLabelConfig={{
+              "node.a11yDescription.default": t("teamWorkflow.nodeKeyboard"),
+              "node.a11yDescription.keyboardDisabled": t(
+                "teamWorkflow.nodeKeyboard",
+              ),
+              "edge.a11yDescription.default": t("teamWorkflow.edgeKeyboard"),
+            }}
+          >
+            <Background color="var(--ui-edge)" />
+          </ReactFlow>
+        </EdgeOpen.Provider>
         <div className={styles.canvasControls}>
+          <IconButton
+            icon={LayoutGrid}
+            label={t("teamWorkflow.arrange")}
+            disabled={readOnly}
+            onClick={() => {
+              const next = layoutWorkflow(nodes, graph.edges);
+              setNodes(next);
+              onChange(layoutFromNodes(workflow, next));
+              setFitPending(true);
+            }}
+          />
           <IconButton
             icon={ZoomIn}
             label={t("teamWorkflow.zoomIn")}
@@ -436,10 +653,33 @@ function Canvas({
           <IconButton
             icon={Scan}
             label={t("teamWorkflow.fit")}
-            onClick={() => void flow.fitView()}
+            onClick={fitCanvas}
           />
         </div>
       </div>
+      <Dialog
+        open={selectedRules.length > 0}
+        title={t("teamWorkflow.rules")}
+        onClose={() => setSelectedRules([])}
+      >
+        <ul className={styles.rules}>
+          {selectedRules.map((rule) => (
+            <li key={rule.id} className={styles.row} data-rule-id={rule.id}>
+              <button
+                type="button"
+                className={styles.ruleText}
+                aria-label={`${rule.id}: ${ruleSummary(rule, members, channels, t)}`}
+                onClick={() => {
+                  setSelectedRules([]);
+                  onEdit(rule);
+                }}
+              >
+                {ruleSummary(rule, members, channels, t)}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </Dialog>
       <Dialog
         open={selected !== null}
         title={entityName}

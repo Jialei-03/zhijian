@@ -80,6 +80,10 @@ def test_disabled_member_cancels_queued_and_rules_do_not_wake(world):
     mid, _ = create(world)
     send(world, "@Ada first")
     first = deliveries(app)[0]
+    # Busy, so the second message queues instead of joining the unstarted wake.
+    with app.state.maker() as d:
+        d.get(AgentRun, first.run_id).status = "running"
+        d.commit()
     send(world, "@Ada second")
     assert deliveries(app)[1].status == "queued"
     assert a.patch(base + f"/members/{mid}", json={"enabled": False}).status_code == 200
@@ -101,6 +105,56 @@ def test_disabled_member_cancels_queued_and_rules_do_not_wake(world):
     assert a.put(base + "/workflow", json=flow).status_code == 200
     send(world, "try disabled rule")
     assert len(deliveries(app)) == 2
+
+
+def test_overview_distinguishes_queued_deliveries_runs_and_idle(world):
+    app, a, _, settings, _, _, _, base, _ = world
+    mid, _ = create(world)
+
+    def status():
+        return next(m for m in a.get(base).json()["members"] if m["id"] == mid)
+
+    assert status()["status"] == "idle"
+    send(world, "@Ada first")
+    first = deliveries(app)[0]
+    # A delivery has a run before a worker claims it.
+    assert status()["status"] == "queued"
+    assert status()["active_run_id"] == first.run_id
+    with app.state.maker() as d:
+        d.get(AgentRun, first.run_id).status = "running"
+        d.commit()
+    assert status()["status"] == "working"
+    # Busy, so the second message queues instead of joining the unstarted wake.
+    send(world, "@Ada second")
+    assert deliveries(app)[1].status == "queued"
+    finish(app, first.run_id, "done")
+    assert status()["status"] == "queued"
+    assert status()["active_run_id"] is None
+    team.settle(settings, app.state.maker)
+    assert status()["status"] == "queued"
+    finish(app, deliveries(app)[1].run_id, "done")
+    team.settle(settings, app.state.maker)
+    assert status()["status"] == "idle"
+    assert all(m["status"] == "idle" for m in a.get(base).json()["members"])
+
+
+def test_overview_member_limit_waits_instead_of_queueing(world):
+    app, a, _, _, _, _, _, base, _ = world
+    response = a.post(
+        base + "/members",
+        json={
+            "source": "---\nname: Ada\nbudget: {total_tokens: 10}\n---\nCheck evidence"
+        },
+    )
+    assert response.status_code == 200, response.text
+    mid = response.json()["id"]
+    with app.state.maker() as d:
+        d.get(TeamMember, mid).tokens = 10
+        d.commit()
+    send(world, "@Ada verify")
+    assert deliveries(app)[0].status == "queued"
+    member = next(m for m in a.get(base).json()["members"] if m["id"] == mid)
+    assert member["status"] == "waiting" and member["active_run_id"] is None
 
 
 def test_subscribers_are_real_members_and_share_rule_limit(world):

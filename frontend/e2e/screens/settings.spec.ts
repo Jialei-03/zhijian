@@ -115,6 +115,7 @@ test("models are added, chosen, tested and removed", async ({ page }) => {
 });
 
 test("the theme and the language change at once", async ({ page }) => {
+  await page.setViewportSize({ width: 720, height: 900 });
   await page.goto(SETTINGS("general"));
   await page.getByRole("radio", { name: "深色" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
@@ -132,6 +133,11 @@ test("the theme and the language change at once", async ({ page }) => {
   // Only the name of the other language is in Chinese.
   const text = await window.innerText();
   expect(text.replace("中文", "")).not.toMatch(/[一-鿿]/);
+  expect(
+    await window
+      .getByRole("main")
+      .evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
+  ).toBe(true);
   await page.goto(SETTINGS("usage"));
   await expect(page.getByRole("region", { name: "Usage" })).toBeVisible();
   await page.goto(SETTINGS("general"));
@@ -139,6 +145,45 @@ test("the theme and the language change at once", async ({ page }) => {
   await expect(window).toBeVisible();
   await page.getByRole("radio", { name: "中文" }).click();
   await expect(page.getByRole("dialog", { name: "设置" })).toBeVisible();
+});
+
+test("full-window settings keep the desktop inset, search and native dialog controls", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 720, height: 900 });
+  await page.goto("/#new");
+  await page.evaluate(() => {
+    document.documentElement.dataset.desktop = "darwin";
+  });
+  const open = page
+    .getByRole("navigation", { name: "侧栏", exact: true })
+    .getByRole("link", { name: "设置", exact: true });
+  await open.click();
+  const dialog = page.getByRole("dialog", { name: "设置", exact: true });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveCSS("top", "32px");
+  await expect(dialog).toHaveCSS("height", "868px");
+  await expect(dialog).toHaveCSS("width", "720px");
+  const search = dialog.getByRole("searchbox");
+  await expect(search).toBeFocused();
+  await expect(search.locator("..")).toHaveCSS("box-shadow", /1\.5px/);
+  await search.fill("用量");
+  await expect(dialog.getByRole("navigation").getByRole("button")).toHaveCount(
+    1,
+  );
+  await search.press("Enter");
+  await expect(dialog.getByRole("heading", { level: 1 })).toHaveText("用量");
+  await search.fill("");
+  const close = dialog.getByRole("button", { name: "关闭", exact: true });
+  await close.focus();
+  await expect(close).toBeFocused();
+  await search.focus();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(page).toHaveURL(/#new$/);
+  await open.click();
+  await close.click();
+  await expect(dialog).toBeHidden();
 });
 
 test("the data, its use and the export are shown", async ({ page }) => {
@@ -153,6 +198,87 @@ test("the data, its use and the export are shown", async ({ page }) => {
   const usage = page.getByRole("region", { name: "用量" });
   await expect(usage.getByText("请求", { exact: true })).toBeVisible();
   await expect(usage.getByText("Tokens", { exact: true })).toBeVisible();
+});
+
+test("local browser data settings show a copyable log folder", async ({
+  page,
+}) => {
+  await page.route("**/api/v1/storage-usage", (route) =>
+    route.fulfill({
+      json: {
+        used_bytes: 0,
+        limit_bytes: 1024,
+        categories: {},
+        logs_path: "/tmp/ora data/logs",
+      },
+    }),
+  );
+  await page.goto(SETTINGS("data"));
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: (value: string) => {
+          document.documentElement.dataset.copiedLogPath = value;
+          return Promise.resolve();
+        },
+      },
+    });
+  });
+  const data = page.getByRole("region", { name: "数据" });
+  await expect(
+    data.getByText("/tmp/ora data/logs", { exact: true }),
+  ).toBeVisible();
+  const exportRow = data
+    .getByRole("button", { name: "下载 ZIP" })
+    .locator("..");
+  await expect(exportRow).toHaveCSS("min-height", "56px");
+  await expect(exportRow).toHaveCSS("padding", "12px 16px");
+  await expect(exportRow.locator("..")).toHaveCSS("border-radius", "16px");
+  expect(
+    await exportRow.evaluate((row) => {
+      const divider = getComputedStyle(row, "::before");
+      return [divider.height, divider.left, divider.right];
+    }),
+  ).toEqual(["1px", "16px", "16px"]);
+  await data.getByRole("button", { name: "复制路径" }).click();
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-copied-log-path",
+    "/tmp/ora data/logs",
+  );
+  await page.setViewportSize({ width: 720, height: 420 });
+  const dialog = page.getByRole("dialog", { name: "设置", exact: true });
+  await dialog.getByRole("main").evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  await expect(
+    dialog.getByRole("button", { name: "关闭", exact: true }),
+  ).toBeInViewport();
+});
+
+test("desktop data settings use the log folder action", async ({ page }) => {
+  await page.route("**/api/v1/storage-usage", (route) =>
+    route.fulfill({
+      json: {
+        used_bytes: 0,
+        limit_bytes: 1024,
+        categories: {},
+        logs_path: "/tmp/ora/logs",
+      },
+    }),
+  );
+  await page.goto(SETTINGS("data"));
+  // As the desktop preload does; the section reads it when it renders.
+  await page.evaluate(() => {
+    document.documentElement.dataset.desktop = "darwin";
+  });
+  await page.getByRole("button", { name: "常规" }).click();
+  await page.getByRole("button", { name: "数据" }).click();
+  const data = page.getByRole("region", { name: "数据" });
+  await expect(
+    data.getByRole("button", { name: "打开日志文件夹" }),
+  ).toBeVisible();
+  await expect(data.getByRole("button", { name: "复制路径" })).toHaveCount(0);
 });
 
 test("share links and credentials can only be revoked", async ({ page }) => {
@@ -175,10 +301,16 @@ test("share links and credentials can only be revoked", async ({ page }) => {
   await page.goto(SETTINGS("access"));
   const access = page.getByRole("region", { name: "分享链接和凭据" });
   const shares = access.getByRole("list", { name: "分享链接" });
+  await expect(shares).toHaveCSS("padding", "4px");
+  await expect(shares).toHaveCSS("border-radius", "16px");
+  await expect(shares).not.toHaveCSS("box-shadow", "none");
   const shareRow = shares
     .getByRole("listitem")
     .filter({ hasText: paper.title });
   await expect(shareRow).toContainText("paper.pdf");
+  await expect(shareRow).toHaveCSS("padding", "7px 9px");
+  await expect(shareRow).toHaveCSS("gap", "9px");
+  await expect(shareRow).toHaveCSS("border-radius", "12px");
   // There is nothing to make here: only revoking.
   await expect(access.getByRole("button", { name: /创建|新建/ })).toHaveCount(
     0,

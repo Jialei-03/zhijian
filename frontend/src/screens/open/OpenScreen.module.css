@@ -26,9 +26,9 @@
 
 .title {
   margin: 0;
-  font-family: var(--ui-font-sans);
+  font-family: var(--ui-font-display);
   font-size: var(--ui-text-24);
-  font-weight: var(--ui-weight-strong);
+  font-weight: var(--ui-weight-regular);
   line-height: var(--ui-leading-tight);
 }
 

@@ -2,10 +2,33 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   convertAgentDocument,
   importAgentDocument,
+  addTeamMember,
+  editTeamMember,
 } from "../research/team-api";
 import { documentDraft, memberDraft } from "./member-model";
 
 afterEach(() => vi.unstubAllGlobals());
+it("sends image data only with the member save and marks image-sized requests", async () => {
+  vi.stubGlobal("document", { cookie: "" });
+  const fetcher = vi.fn().mockImplementation(async () => new Response("{}"));
+  vi.stubGlobal("fetch", fetcher);
+  const upload = { extension: "png" as const, content: "image-base64" };
+  await addTeamMember("w", {
+    config: memberDraft({ name: "Ada" }),
+    avatar_upload: upload,
+  });
+  expect(fetcher.mock.calls[0][1].headers.get("X-Avatar-Upload")).toBe("1");
+  expect(JSON.parse(fetcher.mock.calls[0][1].body).avatar_upload).toEqual(
+    upload,
+  );
+  await editTeamMember("w", "ada", {
+    config: memberDraft({ name: "Ada", avatar: "pixel:new" }),
+  });
+  expect(fetcher.mock.calls[1][1].headers.has("X-Avatar-Upload")).toBe(false);
+  expect(JSON.parse(fetcher.mock.calls[1][1].body).config.avatar).toBe(
+    "pixel:new",
+  );
+});
 it("form → source → form sends the original document and keeps unknown fields", async () => {
   vi.stubGlobal("document", { cookie: "" });
   const source = "---\nname: Ada\nfuture: [keep]\n---\n\n# Original";

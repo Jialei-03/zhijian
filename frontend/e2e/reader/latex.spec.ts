@@ -169,8 +169,12 @@ test("an arXiv paper is translated from its LaTeX source, and the job is followe
   await open(page, paper);
 
   // Both ways are there to choose; nothing has been started for the person.
-  await expect(way(page, "源码重编")).toContainText("翻译 arXiv 的 LaTeX 源码");
-  await expect(way(page, "版面翻译")).toContainText("保留原有版面");
+  await expect(
+    way(page, "源码重编").getByRole("button", { name: "开始源码重编" }),
+  ).toBeEnabled();
+  await expect(
+    way(page, "版面翻译").getByRole("button", { name: "开始版面翻译" }),
+  ).toBeEnabled();
   await expect(way(page, "源码重编")).toContainText("未开始");
   expect(service.started).toEqual([]);
   await way(page, "源码重编")
@@ -410,8 +414,8 @@ test("without any way to compile or re-typeset, the local build offers the LaTeX
   await serve(page, paper, { latex: false, installable: true, layout: false });
   await open(page, paper);
 
-  await expect(way(page, "源码重编")).toContainText("先安装一次编译器");
-  await expect(way(page, "版面翻译")).toContainText("还没有配置版面翻译");
+  await expect(way(page, "源码重编")).toContainText("未安装 LaTeX 编译器");
+  await expect(way(page, "版面翻译")).toContainText("未配置版面翻译");
   await expect(
     panel(page).getByRole("button", { name: "安装 LaTeX 编译器" }),
   ).toBeVisible();

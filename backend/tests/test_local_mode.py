@@ -62,6 +62,16 @@ def test_local_mode_uses_the_existing_reader(local_app):
         assert c.get("/api/v1/auth/me").json()["user"]["username"] == "ada"
 
 
+def test_local_storage_usage_exposes_only_the_log_folder(local_app, tmp_path):
+    with client(local_app) as c:
+        assert c.get("/api/v1/auth/me").status_code == 200
+        response = c.get("/api/v1/storage-usage")
+        assert response.status_code == 200
+        body = response.json()
+    assert body["logs_path"] == str(tmp_path / "logs")
+    assert not (tmp_path / "logs").exists()  # Reading settings creates nothing.
+
+
 @pytest.mark.parametrize(
     "host, base_url, headers",
     [

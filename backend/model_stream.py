@@ -1,6 +1,7 @@
 """Read OpenAI SSE responses while exposing only visible answer text."""
 
 import json
+import logging
 
 import httpx
 
@@ -29,8 +30,15 @@ async def streamed_post(client, url, headers, body, on_delta):
             try:
                 value = json.loads(payload)
             except json.JSONDecodeError:
+                # The fragment is model output, never credentials.
+                logging.getLogger(__name__).warning(
+                    "Unparseable stream event: %r", payload[:200]
+                )
                 raise ModelError("malformed", MALFORMED) from None
             if not isinstance(value, dict):
+                logging.getLogger(__name__).warning(
+                    "Unexpected stream event: %r", payload[:200]
+                )
                 raise ModelError("malformed", MALFORMED)
             if value.get("error"):
                 raise ModelError("server_error", STREAM_FAILED)

@@ -318,3 +318,92 @@ def test_prepared_artifacts_record_actual_task_options_on_create_and_retry(env):
         assert guide.model_config_id == config["id"]
         assert guide.model_options == {"thinking_mode": "adaptive", "reasoning_effort": "low"}
         assert len(list(d.scalars(select(ReadingArtifact)))) == 2
+
+
+@pytest.mark.parametrize("failure", ["", "guide", "page", "both"])
+def test_preparation_failures_are_saved_per_feature_without_layout_notice(env, monkeypatch, failure):
+    app, a, _, settings, p, _ = fixture(env)
+    cfg = {"id": "fixture", "api_key": "fake-only", "model": "fixture",
+           "base_url": "https://example.invalid/v1"}
+    monkeypatch.setattr("backend.preparation_worker.read_config", lambda *a: cfg)
+    monkeypatch.setattr("backend.preparation_worker.bind", lambda cfg, *a: cfg)
+    monkeypatch.setattr("backend.preparation_worker.layout_available", lambda _: False)
+    monkeypatch.setattr("backend.preparation_worker.extract_pdf_pages", lambda _: [
+        "First source sentence.", "Second source sentence.",
+    ])
+    guide = {"keywords": ["test"], "summary": ["一", "二", "三"],
+             "sections": [{"title": t, "body": "正文", "pages": [1]}
+                          for t in ["研究问题", "方法", "主要结果", "适用边界"]]}
+
+    def make_guide(*args):
+        if failure in {"guide", "both"}:
+            raise ValueError("导读模型失败")
+        return json.dumps(guide)
+
+    def translate(self, originals):
+        if failure in {"page", "both"} and originals == ["Second source sentence."]:
+            raise ValueError("第 2 页模型失败")
+        return [{"original": original, "translation": "译文。", "kind": "text"}
+                for original in originals]
+
+    monkeypatch.setattr("backend.preparation_worker.whole_paper", make_guide)
+    monkeypatch.setattr(SentenceMemory, "translate", translate)
+    reconcile(settings, app.state.maker)
+    with app.state.maker() as d:
+        row = d.scalar(select(PaperPreparation))
+        row.status = "running"
+        identifier = row.id
+        d.commit()
+    process(settings, app.state.maker, identifier)
+    state = a.get(f"/api/v1/papers/{p['id']}/preparation").json()
+    assert state["layout_status"] == "unavailable"
+    assert state["status"] == ("failed" if failure else "completed")
+    assert "布局" not in state["error"]
+    assert state["error"] == "；".join(
+        (["第 2 页模型失败"] if failure in {"page", "both"} else [])
+        + (["导读模型失败"] if failure in {"guide", "both"} else [])
+    )
+    rows = a.get(f"/api/v1/papers/{p['id']}/reading-artifacts").json()
+    assert len(rows) == 3
+    saved_guide = next(r for r in rows if r["kind"] == "guide")
+    pages = {r["parameters"]["page"]: r for r in rows if r["kind"] == "page_translation"}
+    assert saved_guide["error"] == ("导读模型失败" if failure in {"guide", "both"} else "")
+    assert pages[1]["status"] == "completed" and pages[1]["error"] == ""
+    assert pages[2]["error"] == ("第 2 页模型失败" if failure in {"page", "both"} else "")
+    # The parent can restart independently; terminal feature failures stay local.
+    with app.state.maker() as d:
+        d.get(PaperPreparation, identifier).status = "running"
+        d.commit()
+    again = a.get(f"/api/v1/papers/{p['id']}/reading-artifacts").json()
+    for row in again:
+        assert row["status"] == next(r["status"] for r in rows if r["id"] == row["id"])
+    if not failure:
+        with app.state.maker() as d:
+            d.get(PaperPreparation, identifier).status = "completed"
+            d.commit()
+        reconcile(settings, app.state.maker)
+        assert a.get(f"/api/v1/papers/{p['id']}/preparation").json()["status"] == "completed"
+        monkeypatch.setattr("backend.preparation_worker.layout_available", lambda _: True)
+        reconcile(settings, app.state.maker)
+        assert a.get(f"/api/v1/papers/{p['id']}/preparation").json()["status"] == "queued"
+
+
+def test_preparation_source_failure_is_kept_with_the_guide(env, monkeypatch):
+    app, a, _, settings, p, _ = fixture(env)
+    monkeypatch.setattr("backend.preparation_worker.read_config", lambda *a: {
+        "id": "fixture", "api_key": "fake-only", "model": "fixture",
+    })
+    monkeypatch.setattr("backend.preparation_worker.extract_pdf_pages", lambda _: [""])
+    reconcile(settings, app.state.maker)
+    with app.state.maker() as d:
+        row = d.scalar(select(PaperPreparation))
+        row.status = "running"
+        identifier = row.id
+        d.commit()
+    process(settings, app.state.maker, identifier)
+    state = a.get(f"/api/v1/papers/{p['id']}/preparation").json()
+    assert state["status"] == "failed" and state["guide_status"] == "failed"
+    rows = a.get(f"/api/v1/papers/{p['id']}/reading-artifacts").json()
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "guide" and rows[0]["status"] == "failed"
+    assert "没有文字层" in rows[0]["error"]

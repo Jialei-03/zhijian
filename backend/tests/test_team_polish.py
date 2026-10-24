@@ -41,7 +41,7 @@ def call(world, run_id, name, args):
 
 def test_all_mentions_and_language_at_front(world):
     app, _, _, _, _, _, wid, *_ = world
-    first = send(world, "@writer 写引言，做完交给 @文献员，然后 @评审")
+    send(world, "@writer 写引言，做完交给 @文献员，然后 @评审")
     rows = deliveries(app)
     assert len(rows) == 3
     with app.state.maker() as d:
@@ -49,7 +49,7 @@ def test_all_mentions_and_language_at_front(world):
         run = d.get(AgentRun, rows[0].run_id)
         assert "做完交给 @文献员" in run.prompt
         assert run.context.startswith("## 语言\n用中文")
-        assert run.runtime["team"]["thread_id"] == first["id"]
+        assert run.runtime["team"]["thread_id"] is None
     send(world, "Please continue in English.")
     with app.state.maker() as d:
         assert team.language_part(d, d.get(ResearchWorkspace, wid)).startswith(
@@ -89,7 +89,8 @@ def test_agent_wakes_everyone_named_without_a_cap(members):
 def test_merge_unstarted_wakes_in_thread_and_keep_all_requests(world):
     app, _, _, settings, *_ = world
     send(world, "@writer busy elsewhere")
-    root = send(world, "@writer first queued task")
+    root = send(world, "Thread")
+    send(world, "@writer first queued task", thread_id=root["id"])
     send(world, "@writer add references", thread_id=root["id"])
     rows = deliveries(app)
     assert len(rows) == 2 and rows[-1].status == "queued"
@@ -105,8 +106,8 @@ def test_merge_unstarted_wakes_in_thread_and_keep_all_requests(world):
 
 def test_merge_a_run_created_but_not_claimed_by_worker(world):
     app, *_ = world
-    root = send(world, "@writer first request")
-    send(world, "@writer add citations", thread_id=root["id"])
+    send(world, "@writer first request")
+    send(world, "@writer add citations")
     assert len(deliveries(app)) == 1
     with app.state.maker() as d:
         run = d.get(AgentRun, deliveries(app)[0].run_id)
@@ -119,6 +120,9 @@ def test_merged_wake_retains_attachments_and_rule_instructions(world):
 
     app, _, _, settings, *_ = world
     send(world, "@writer busy elsewhere")
+    with app.state.maker() as d:
+        d.get(AgentRun, deliveries(app)[0].run_id).status = "running"
+        d.commit()
     with app.state.maker() as d:
         workspace = d.get(ResearchWorkspace, world[6])
         channel = d.get(
@@ -141,7 +145,6 @@ def test_merged_wake_retains_attachments_and_rule_instructions(world):
             workspace,
             channel,
             "@writer second requirement",
-            thread_id=root.id,
             data={"attachments": [{"id": "second-file"}]},
         )
         d.commit()
@@ -178,7 +181,7 @@ def test_agent_handoff_merges_into_members_unclaimed_run(world):
 
 def test_placeholder_filled_and_routed_once(world):
     app, a, _, settings, *_ = world
-    root = send(world, "@librarian find papers")
+    send(world, "@librarian find papers")
     row = deliveries(app)[0]
     result = call(
         world,
@@ -194,7 +197,7 @@ def test_placeholder_filled_and_routed_once(world):
             d.scalars(select(TeamMessage).where(TeamMessage.author_id == row.member_id))
         )
         assert len(replies) == 1 and replies[0].id == result["message_id"]
-        assert replies[0].thread_id == root["id"] and replies[0].text
+        assert replies[0].thread_id is None and replies[0].text
     assert len(deliveries(app)) == 2
     queued = a.get(world[7] + "/deliveries").json()
     assert not queued  # Agent deliveries never appear above the human composer.
@@ -217,13 +220,13 @@ def test_cross_channel_post_links_back_and_uses_origin_relay(world):
         response = d.scalar(
             select(TeamMessage).where(TeamMessage.source_key == f"run:{row.run_id}")
         )
-        assert response.thread_id == root["id"]
+        assert response.thread_id is None
         assert response.data["links"][0]["thread_id"] == result["message_id"]
         next_run = d.get(AgentRun, deliveries(app)[-1].run_id)
         assert next_run.runtime["team"]["routing_scope"] == [
             world[6],
             root["channel_id"],
-            root["id"],
+            None,
         ]
 
 
@@ -254,7 +257,7 @@ def test_advisor_direction_does_not_implicitly_wait(world):
 
 def test_explicit_question_pauses_and_notifies_owner(world):
     app, a, _, settings, *_ = world
-    root = send(world, "@advisor review")
+    send(world, "@advisor review")
     row = deliveries(app)[0]
     call(world, row.run_id, "team_wait_for_owner", {"text": "改用另一套方法吗？"})
     finish(app, row.run_id, "改用另一套方法吗？")
@@ -264,8 +267,14 @@ def test_explicit_question_pauses_and_notifies_owner(world):
         m["kind"] == "relay_limit" and m["data"]["waiting"]
         for m in a.get(world[7]).json()["notifications"]
     )
-    send(world, "@writer 按这个方向写", thread_id=root["id"])
+    assert next(
+        m for m in a.get(world[7]).json()["members"] if m["role"] == "human"
+    )["status"] == "waiting"
+    send(world, "@writer 按这个方向写")
     assert len(deliveries(app)) == 2
+    assert next(
+        m for m in a.get(world[7]).json()["members"] if m["role"] == "human"
+    )["status"] == "idle"
 
 
 def test_failed_empty_and_time_limited_output(world, monkeypatch):
@@ -473,13 +482,13 @@ def test_team_limits_queue_notify_once_resume_and_isolate(world):
         == 422
     )
     assert a.put(base + "/budget", json=budget).status_code == 200
-    root = send(world, "@writer @librarian find and write")
+    send(world, "@writer @librarian find and write")
     assert sorted(r.status for r in deliveries(app)) == ["queued", "running"]
     team.settle(settings, app.state.maker)
     team.settle(settings, app.state.maker)
     with app.state.maker() as d:
         notes = list(d.scalars(select(TeamMessage).where(TeamMessage.kind == "budget")))
-        assert len(notes) == 1 and notes[0].thread_id == root["id"]
+        assert len(notes) == 1 and notes[0].thread_id is None
     assert any(
         m["data"].get("reason") == "concurrent"
         for m in a.get(base).json()["notifications"]
@@ -553,8 +562,11 @@ def test_member_budget_enforcement_uses_run_receipts_and_continue(world):
 def test_merged_wake_can_be_sent_immediately(world):
     app, *_ = world
     send(world, "@writer busy")
-    root = send(world, "@writer queued")
-    send(world, "@writer urgent clarification", thread_id=root["id"], mode="immediate")
+    with app.state.maker() as d:
+        d.get(AgentRun, deliveries(app)[0].run_id).status = "running"
+        d.commit()
+    send(world, "@writer queued")
+    send(world, "@writer urgent clarification", mode="immediate")
     rows = deliveries(app)
     assert len(rows) == 2 and rows[1].status == "steering"
     with app.state.maker() as d:
@@ -639,19 +651,20 @@ def test_old_jobs_stay_silent_and_running_jobs_notify_when_finished(world):
         assert len(notes) == 1 and notes[0].data["job_id"] == "in-flight"
 
 
-def test_finished_empty_placeholder_has_failure_instead_of_spinner(world):
+def test_finished_empty_placeholder_stays_completed(world):
     app, a, _, settings, *_ = world
     root = send(world, "@writer draft")
     finish(app, deliveries(app)[0].run_id, "")
     team.settle(settings, app.state.maker)
     rows = a.get(
         world[7] + f"/channels/{root['channel_id']}/messages",
-        params={"thread_id": root["id"]},
     ).json()["messages"]
+    rows = [m for m in rows if m.get("run")]
     assert len(rows) == 1
-    assert (
-        rows[0]["run"]["status"] == "failed" and rows[0]["run"]["runtime"]["no_answer"]
-    )
+    assert rows[0]["text"] == ""
+    assert rows[0]["run"]["status"] == "completed"
+    assert not rows[0]["run"]["error"]
+    assert not rows[0]["run"]["runtime"].get("no_answer")
 
 
 def test_queued_run_reads_external_file_budget_at_start(world, tmp_path, monkeypatch):
@@ -816,3 +829,20 @@ def test_agent_mentions_only_refer_and_to_wakes(world):
     finish(app, row.run_id, "@librarian found them; ask @reviewer?")
     team.settle(settings, app.state.maker)
     assert len(deliveries(app)) == 1
+
+
+def test_wake_names_who_works_next_and_never_the_researcher(world):
+    app, _, _, settings, *_ = world
+    send(world, "@librarian find a paper")
+    row = deliveries(app)[0]
+    call(
+        world,
+        row.run_id,
+        "team_send_message",
+        {"text": "Found it", "wake": ["writer", "研究者", "human", "librarian"]},
+    )
+    finish(app, row.run_id, "Found it")
+    team.settle(settings, app.state.maker)
+    with app.state.maker() as d:
+        woken = [d.get(TeamMember, r.member_id).role for r in deliveries(app)[1:]]
+    assert woken == ["writer"]

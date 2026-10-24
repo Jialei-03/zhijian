@@ -70,8 +70,10 @@ export function WorkspaceScreen({
         <div>
           <h1>{workspace?.name || t("workspace.workspaces")}</h1>
           {workspace && (
-            <p title={machine(workspace.location).title}>
-              {machine(workspace.location).label} · {workspace.location.path}
+            <p
+              title={`${machine(workspace.location).title} · ${workspace.location.path}`}
+            >
+              {machine(workspace.location).label}
             </p>
           )}
         </div>
@@ -151,6 +153,17 @@ export function WorkspaceScreen({
         )
       ) : id ? (
         <p className={styles.empty}>{t("workspace.notFound")}</p>
+      ) : !data.workspaces.some((item) => !item.archived) ? (
+        <div className={styles.emptyProjects}>
+          <Folder aria-hidden />
+          <Button
+            variant="primary"
+            icon={Plus}
+            onClick={() => setCreating(true)}
+          >
+            {t("workspace.add")}
+          </Button>
+        </div>
       ) : (
         <div className={styles.folderCards}>
           {data.workspaces
@@ -164,16 +177,15 @@ export function WorkspaceScreen({
                 <Folder size={22} aria-hidden />
                 <span>
                   <strong>{item.name}</strong>
-                  <small title={machine(item.location).title}>
-                    {machine(item.location).label} · {item.location.path}
+                  <small
+                    title={`${machine(item.location).title} · ${item.location.path}`}
+                  >
+                    {machine(item.location).label}
                   </small>
                 </span>
                 <span>{item.researches.length}</span>
               </a>
             ))}
-          {!data.workspaces.length && (
-            <p className={styles.empty}>{t("workspace.noWorkspaces")}</p>
-          )}
         </div>
       )}
       {creating && (
@@ -412,19 +424,27 @@ export function ResearchRows({
     );
   return (
     <div className={styles.researchList}>
-      <Button size="sm" variant="ghost" onClick={() => setArchived(!archived)}>
-        {t(
-          archived ? "projects.sessions.active" : "projects.sessions.archived",
-        )}
-      </Button>
-      <TextField
-        type="search"
-        label={t("workspace.searchResearch")}
-        hideLabel
-        placeholder={t("workspace.searchResearch")}
-        value={search}
-        onChange={(event) => setSearch(event.target.value)}
-      />
+      <div className={styles.researchToolbar}>
+        <TextField
+          type="search"
+          label={t("workspace.searchResearch")}
+          hideLabel
+          placeholder={t("workspace.searchResearch")}
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
+        <SegmentedControl
+          kind="radio"
+          size="sm"
+          label={t("research.archiveFilter")}
+          value={archived ? "archived" : "unarchived"}
+          onChange={(value) => setArchived(value === "archived")}
+          options={[
+            { value: "unarchived", label: t("research.unarchived") },
+            { value: "archived", label: t("projects.sessions.archived") },
+          ]}
+        />
+      </div>
       {filtered.map((item) => (
         <a
           key={item.id}
@@ -433,7 +453,9 @@ export function ResearchRows({
         >
           <span className={styles.rowTitle}>
             {item.pinned_at && <Pin size={12} aria-hidden />}
-            {item.title || item.question}
+            <span className={styles.rowName}>
+              {item.title || item.question}
+            </span>
           </span>
           <span className={styles.rowStatus}>{t(researchStatus(item))}</span>
           {archived && (
@@ -453,8 +475,12 @@ export function ResearchRows({
               {t("projects.sessions.restore")}
             </Button>
           )}
-          {item.title && item.title !== item.question && <p>{item.question}</p>}
-          {item.progress && <p>{item.progress}</p>}
+          {item.title && item.title !== item.question && (
+            <p className={styles.rowQuestion}>{item.question}</p>
+          )}
+          {item.progress && (
+            <p className={styles.rowProgress}>{item.progress}</p>
+          )}
           {(item.merged?.memory || item.merged?.code) && (
             <small>{t("research.merge.applied")}</small>
           )}

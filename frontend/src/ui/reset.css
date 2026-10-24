@@ -12,6 +12,12 @@ html,
 body {
   height: 100%;
 }
+html {
+  font-feature-settings: "cv11", "ss03", "calt";
+  font-optical-sizing: auto;
+  font-synthesis-weight: none;
+  text-autospace: normal;
+}
 body {
   background: var(--ui-bg-1);
   color: var(--ui-fg);

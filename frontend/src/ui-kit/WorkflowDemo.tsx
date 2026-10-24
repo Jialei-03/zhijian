@@ -9,15 +9,38 @@ import type {
 import { applyTheme } from "../ui";
 import "../ui/reset.css";
 import {
+  researchWorkflowFixture,
+  researchWorkflowMembers,
   workflowChannels,
   workflowFixture,
   workflowMembers,
 } from "./workflow-fixture";
 
 function WorkflowDemo() {
-  const [workflow, setWorkflow] = useState(() =>
-    structuredClone(workflowFixture),
-  );
+  const research =
+    new URLSearchParams(location.search).get("fixture") === "research";
+  const [workflow, setWorkflow] = useState(() => {
+    const workflow = structuredClone(
+      research ? researchWorkflowFixture : workflowFixture,
+    );
+    const params = new URLSearchParams(location.search);
+    if (params.get("layout") === "auto") {
+      workflow.layout = { members: {}, channels: {} };
+      for (const rule of workflow.rules) delete rule.position;
+    }
+    if (params.has("parallel")) {
+      workflow.rules.push({
+        ...structuredClone(workflow.rules[0]),
+        id: "parallel",
+      });
+      workflow.rules.push({
+        ...structuredClone(workflow.rules[0]),
+        id: "wake",
+        then: { action: "wake", member: "reviewer" },
+      });
+    }
+    return workflow;
+  });
   const [opened, setOpened] = useState<WorkflowNodeTarget | null>(null);
   const [runtime, setRuntime] = useState<WorkflowRuntime>({
     members: { executor: "working", reviewer: "waiting" },
@@ -33,7 +56,7 @@ function WorkflowDemo() {
     <>
       <WorkflowView
         workflow={workflow}
-        members={workflowMembers}
+        members={research ? researchWorkflowMembers : workflowMembers}
         channels={workflowChannels}
         onChange={setWorkflow}
         runtime={runtime}

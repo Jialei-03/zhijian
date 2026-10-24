@@ -104,7 +104,7 @@ test("evaluation matrix and rerun preserve the selected workflow", async ({
             numbers: [],
             tokens: 100,
             job_seconds: 0,
-            elapsed_seconds: 60,
+            elapsed_seconds: 90,
             rounds: 1,
             members: [],
           })),
@@ -165,6 +165,16 @@ test("evaluation matrix and rerun preserve the selected workflow", async ({
     .poll(() => createdBody?.workflow_ids)
     .toEqual(["research", "peers"]);
   await expect(page.getByRole("table", { name: "Matrix" })).toBeVisible();
+  await expect(
+    page
+      .getByRole("table", { name: "Matrix" })
+      .getByRole("columnheader", { name: "研究", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page
+      .getByRole("table", { name: "Matrix" })
+      .getByText("1 分 30 秒", { exact: true }),
+  ).toHaveCount(2);
   await page
     .getByRole("table", { name: "Matrix" })
     .getByRole("link", { name: "已完成" })
@@ -234,13 +244,13 @@ for (const theme of ["light", "dark"]) {
           threads: ids.map((id, index) => ({
             id,
             title: `Study ${index + 1}`,
-            workflow: index ? "Peers" : "Review",
+            workflow: index ? "Peers" : "研究",
             status: "finished",
             conclusion: "L2 helps.",
             numbers: [{ name: "accuracy", value: index ? 0.95 : 0.91 }],
             tokens: index ? 800 : 1000,
-            job_seconds: 60,
-            elapsed_seconds: 90,
+            job_seconds: 90,
+            elapsed_seconds: index ? 6758 : 9408,
             rounds: 2,
             members: [
               { id: "executor", name: "executor", messages: 2, tokens: 800 },
@@ -254,6 +264,19 @@ for (const theme of ["light", "dark"]) {
     const table = page.getByRole("table", { name: "比较" });
     await expect(
       table.getByRole("columnheader", { name: /Study 1/ }),
+    ).toBeVisible();
+    await expect(
+      table.getByRole("columnheader", { name: /Study 1/ }),
+    ).toContainText("研究");
+    await expect(
+      table.getByRole("columnheader", { name: /Study 1/ }),
+    ).not.toContainText("research");
+    await expect(table.getByText("1 分 30 秒", { exact: true })).toHaveCount(2);
+    await expect(
+      table.getByText("2 小时 37 分", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      table.getByText("1 小时 53 分", { exact: true }),
     ).toBeVisible();
     await expect(
       table.locator('[data-different="true"]').filter({ hasText: "0.95" }),

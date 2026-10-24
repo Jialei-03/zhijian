@@ -18,6 +18,8 @@ export async function mockTeam(
       archived_at?: string | null;
     }[];
     history?: () => TeamMessage[];
+    team?: () => Partial<Team>;
+    messages?: (channel: string, thread: string | null) => TeamMessage[];
   } = {},
 ) {
   await page.route("**/api/v1/research/workspaces/*/team**", (route) => {
@@ -66,6 +68,9 @@ export async function mockTeam(
             name: "实验",
             member_id: null,
             unread: 0,
+            last_message: null,
+            last_at: "2026-10-23T00:00:00Z",
+            working_member_ids: [],
           },
           {
             id: advisorDM,
@@ -73,9 +78,13 @@ export async function mockTeam(
             name: "导师",
             member_id: "advisor",
             unread: 0,
+            last_message: null,
+            last_at: "2026-10-23T00:00:00Z",
+            working_member_ids: [],
           },
         ],
         notifications: [],
+        ...options.team?.(),
       };
       return route.fulfill({ json: team });
     }
@@ -83,12 +92,19 @@ export async function mockTeam(
       const thread = url.searchParams.get("thread_id");
       return route.fulfill({
         json: {
-          messages: thread
-            ? []
-            : url.pathname.includes(advisorDM)
-              ? options.history?.() || []
-              : roots,
-          root: roots.find((r) => r.id === thread) || null,
+          messages: options.messages
+            ? options.messages(url.pathname.split("/")[8], thread)
+            : thread
+              ? []
+              : url.pathname.includes(advisorDM)
+                ? options.history?.() || []
+                : roots,
+          root:
+            roots.find((r) => r.id === thread) ||
+            options
+              .messages?.(url.pathname.split("/")[8], null)
+              .find((r) => r.id === thread) ||
+            null,
           research_id: thread?.startsWith("research:") ? thread.slice(9) : null,
         },
       });
@@ -96,9 +112,34 @@ export async function mockTeam(
     if (url.pathname.endsWith("/read"))
       return route.fulfill({ json: { ok: true } });
     if (url.pathname.endsWith("/threads"))
-      return route.fulfill({ json: roots });
+      return route.fulfill({
+        json: options.messages
+          ? options
+              .messages(experiments, null)
+              .filter((message) => message.replies)
+          : roots,
+      });
     if (url.pathname.endsWith("/deliveries"))
       return route.fulfill({ json: [] });
+    if (url.pathname.endsWith("/team/work")) {
+      const none = {
+        asks: 0,
+        pending: 0,
+        median_wait_seconds: null,
+        waiting_seconds: 0,
+        total_seconds: 0,
+        waiting_share: null,
+        partial: false,
+      };
+      return route.fulfill({
+        json: {
+          generated_at: new Date().toISOString(),
+          items: [],
+          counts: { waiting: 0, review: 0, working: 0, queued: 0, done: 0 },
+          attention: { total: none, researches: [], members: {} },
+        },
+      });
+    }
     return route.fulfill({
       status: 404,
       json: { detail: "Unexpected team request" },

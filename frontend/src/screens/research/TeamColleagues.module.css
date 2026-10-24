@@ -1,0 +1,88 @@
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-space-8);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--ui-r-8);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.trigger:focus-visible {
+  outline: none;
+  box-shadow: var(--ui-focus-ring);
+}
+
+.card {
+  width: var(--ui-sidebar-width);
+  max-height: calc(100dvh - var(--ui-space-32));
+  overflow: auto;
+  padding: var(--ui-space-16);
+  border: 1px solid var(--ui-edge);
+  border-radius: var(--ui-r-12);
+  background: var(--ui-bg);
+  color: var(--ui-fg);
+  box-shadow: var(--ui-elev-1);
+  font-size: var(--ui-text-13);
+  overflow-wrap: anywhere;
+}
+
+.card header,
+.card footer,
+.tools {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-8);
+  flex-wrap: wrap;
+}
+
+.card p {
+  margin: var(--ui-space-8) 0;
+  color: var(--ui-fg-2);
+}
+
+.card h3 {
+  font-size: var(--ui-text-12);
+  font-weight: var(--ui-weight-strong);
+  margin: var(--ui-space-12) 0 var(--ui-space-4);
+}
+
+.card footer {
+  margin-top: var(--ui-space-12);
+}
+
+.tools {
+  margin-bottom: var(--ui-space-8);
+  color: var(--ui-fg-2);
+  font-size: var(--ui-text-12);
+}
+
+.status {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ui-fg-2);
+  font-size: var(--ui-text-12);
+}
+
+.card .status {
+  white-space: normal;
+}
+
+.preview {
+  display: flex;
+  width: var(--ui-sheet-width);
+  height: var(--ui-conversation-width);
+  max-height: calc(100dvh - var(--ui-space-32));
+  border: 1px solid var(--ui-edge);
+  border-radius: var(--ui-r-12);
+  background: var(--ui-bg);
+  box-shadow: var(--ui-elev-1);
+}

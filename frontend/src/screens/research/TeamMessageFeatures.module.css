@@ -1,0 +1,72 @@
+.reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-space-4);
+  margin-top: var(--ui-space-6);
+}
+.reactions button {
+  height: var(--ui-control-sm);
+  border: 1px solid var(--ui-edge);
+  border-radius: var(--ui-r-pill);
+  font-size: var(--ui-text-12);
+}
+.reactions button[aria-pressed="true"] {
+  background: var(--ui-selected);
+  border-color: var(--ui-accent);
+}
+.reference {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-6);
+  padding: var(--ui-space-8) var(--ui-space-12);
+  margin: var(--ui-space-6) 0;
+  border-left: 1px solid var(--ui-edge-strong);
+  border-radius: var(--ui-r-8);
+  background: var(--ui-fill);
+  color: var(--ui-fg);
+  text-decoration: none;
+}
+.referenceHeader {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ui-space-8);
+  color: var(--ui-fg-2);
+  font-size: var(--ui-text-12);
+}
+.referenceHeader strong {
+  color: var(--ui-fg);
+  font-weight: var(--ui-weight-strong);
+}
+.referenceHeader time {
+  opacity: 1 !important;
+}
+.excerpt {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.quoteDraft {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-8);
+  margin: var(--ui-space-4) var(--ui-space-6) var(--ui-space-8);
+  padding-left: var(--ui-space-8);
+  border-left: 1px solid var(--ui-edge-strong);
+  color: var(--ui-fg-2);
+  font-size: var(--ui-text-12);
+}
+.quoteDraft .excerpt {
+  flex: 1;
+  min-width: 0;
+  max-height: var(--ui-space-48);
+  overflow: auto;
+}
+.forwardForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-16);
+}
+.reference:focus-visible {
+  outline: none;
+  box-shadow: var(--ui-focus-ring);
+}

@@ -4,7 +4,7 @@
   min-height: 0;
   height: 100%;
   overflow-y: auto;
-  background: var(--ui-bg-1);
+  background: var(--ui-bg);
   container: management / inline-size;
   scrollbar-gutter: stable;
 }

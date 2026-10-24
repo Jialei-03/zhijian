@@ -1,7 +1,8 @@
-import { useId, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { MessageKey } from "../../i18n/i18n";
 import { Button, Dialog, TextArea, TextField } from "../../ui";
+import { newAvatarSeed, pixelAvatarSvg } from "../../ui/pixel-avatar";
 import {
   convertAgentDocument,
   importAgentDocument,
@@ -11,11 +12,12 @@ import type {
   MemberConfig,
   MemberPermissions,
   Team,
+  TeamMember,
+  AvatarUpload,
 } from "../research/team-api";
 import type { ModelRow } from "../setup/model-api";
 import {
-  avatarColors,
-  initials,
+  memberAvatarSeed,
   memberDraft,
   memberName,
   permissionChange,
@@ -26,15 +28,29 @@ import {
 import styles from "./Members.module.css";
 
 export function MemberAvatar({
-  name,
-  color = "blue",
+  member,
+  seed,
+  url = member?.avatar_url,
+  size,
 }: {
-  name: string;
-  color?: string;
+  member?: Partial<TeamMember>;
+  seed?: string;
+  url?: string | null;
+  size?: "sm" | "lg";
 }) {
+  const [failed, setFailed] = useState<string>();
+  const image = !member?.avatar?.startsWith("pixel:") && url && url !== failed;
+  const avatarSeed = member?.avatar?.startsWith("pixel:")
+    ? member.avatar.slice(6)
+    : (seed ?? memberAvatarSeed(member ?? {}));
+  const svg = useMemo(() => pixelAvatarSvg(avatarSeed), [avatarSeed]);
   return (
-    <span className={styles.avatar} data-color={color} aria-hidden="true">
-      {initials(name)}
+    <span className={styles.avatar} data-size={size} aria-hidden="true">
+      {image ? (
+        <img src={url} alt="" onError={() => setFailed(url)} />
+      ) : (
+        <span dangerouslySetInnerHTML={{ __html: svg }} />
+      )}
     </span>
   );
 }
@@ -94,24 +110,30 @@ export function MemberFields({
   models,
   machines,
   body = true,
+  avatarSeed,
+  avatarUrl,
+  onUpload,
   onChange,
 }: {
   draft: MemberConfig;
   identityLocked: boolean;
   body?: boolean;
+  avatarSeed?: string;
+  avatarUrl?: string;
+  onUpload?(file: File): void;
   models: ModelRow[];
   machines: { id: string; name: string }[];
   onChange(d: MemberConfig): void;
 }) {
   const { t } = useI18n();
   const modelId = useId();
-  const colorId = useId();
+  const uploadId = useId();
+  const upload = useRef<HTMLInputElement>(null);
   const set = (patch: Partial<MemberConfig>) =>
     onChange({ ...draft, ...patch });
   return (
     <>
       <div className={styles.identity}>
-        <MemberAvatar name={draft.name} color={draft.avatar_color} />
         <TextField
           required
           maxLength={100}
@@ -121,21 +143,46 @@ export function MemberFields({
           onChange={(e) => set({ name: e.target.value })}
         />
       </div>
-      <div className={styles.field}>
-        <label htmlFor={colorId}>{t("members.color")}</label>
-        <select
-          id={colorId}
-          value={draft.avatar_color}
-          disabled={identityLocked}
-          onChange={(e) => set({ avatar_color: e.target.value })}
-        >
-          {avatarColors.map((color) => (
-            <option value={color} key={color}>
-              {t(`members.color.${color}`)}
-            </option>
-          ))}
-        </select>
-      </div>
+      <fieldset className={styles.field}>
+        <legend>{t("members.avatar")}</legend>
+        <div className={styles.avatarEditor}>
+          <MemberAvatar
+            member={draft}
+            seed={avatarSeed}
+            url={avatarUrl}
+            size="lg"
+          />
+          <Button
+            disabled={identityLocked}
+            onClick={() => set({ avatar: `pixel:${newAvatarSeed()}` })}
+          >
+            {t("members.anotherAvatar")}
+          </Button>
+          {onUpload && (
+            <>
+              <Button
+                disabled={identityLocked}
+                onClick={() => upload.current?.click()}
+              >
+                {t("members.uploadAvatar")}
+              </Button>
+              <input
+                ref={upload}
+                id={uploadId}
+                hidden
+                type="file"
+                accept=".png,.jpg,.jpeg,.webp,.svg"
+                aria-label={t("members.uploadAvatar")}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) onUpload(file);
+                  e.target.value = "";
+                }}
+              />
+            </>
+          )}
+        </div>
+      </fieldset>
       <TextField
         label={t("members.summary")}
         value={draft.description ?? ""}
@@ -235,6 +282,9 @@ export function MemberEditor({
   initialSource = "",
   initialError = "",
   initialSubscriptions = [],
+  initialAvatarSeed,
+  initialAvatarUrl,
+  allowUpload = true,
   role = "custom",
   creating = false,
   team,
@@ -248,6 +298,9 @@ export function MemberEditor({
   initialSource?: string;
   initialError?: string;
   initialSubscriptions?: string[];
+  initialAvatarSeed?: string;
+  initialAvatarUrl?: string;
+  allowUpload?: boolean;
   role?: string;
   builtin?: boolean;
   creating?: boolean;
@@ -260,6 +313,7 @@ export function MemberEditor({
     subscriptions: string[],
     source: string,
     document?: string,
+    upload?: AvatarUpload,
   ): Promise<void>;
   onClose(): void;
 }) {
@@ -279,6 +333,32 @@ export function MemberEditor({
   const [warnings, setWarnings] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(initialError);
+  const [upload, setUpload] = useState<AvatarUpload>();
+  const [preview, setPreview] = useState<string>();
+  const [uploadPath, setUploadPath] = useState<string>();
+  const activeUpload = draft.avatar === uploadPath ? upload : undefined;
+  const uploadAvatar = (file: File) => {
+    const reader = new FileReader();
+    setSaving(true);
+    reader.onload = () => {
+      const url = String(reader.result);
+      const extension = file.name
+        .split(".")
+        .pop()
+        ?.toLowerCase() as AvatarUpload["extension"];
+      setUpload({ extension, content: url.slice(url.indexOf(",") + 1) });
+      setPreview(url);
+      const avatar = `.ora/avatars/${draft.name}.${extension}`;
+      setUploadPath(avatar);
+      setDraft((value) => ({ ...value, avatar }));
+      setSaving(false);
+    };
+    reader.onerror = () => {
+      setError(String(reader.error));
+      setSaving(false);
+    };
+    reader.readAsDataURL(file);
+  };
   const librarySource = source.startsWith("l:");
   const adopt = (value: Awaited<ReturnType<typeof convertAgentDocument>>) => {
     const next = documentDraft(value, team.channels);
@@ -370,6 +450,7 @@ export function MemberEditor({
                 next.subscriptions,
                 source,
                 value.source,
+                next.draft.avatar === uploadPath ? upload : undefined,
               );
             }
           } catch (reason) {
@@ -448,6 +529,8 @@ export function MemberEditor({
               onChange={(e) => {
                 const value = e.target.value;
                 setSource(value);
+                setUpload(undefined);
+                setPreview(undefined);
                 const chosen = value.startsWith("l:")
                   ? library.find((m) => m.id === value.slice(2))
                   : team.members.find((m) => m.id === value.slice(2));
@@ -500,6 +583,15 @@ export function MemberEditor({
                   models={models}
                   machines={machines}
                   onChange={setDraft}
+                  avatarSeed={initialAvatarSeed}
+                  avatarUrl={
+                    activeUpload
+                      ? preview
+                      : draft.avatar === initial?.avatar
+                        ? initialAvatarUrl
+                        : undefined
+                  }
+                  onUpload={allowUpload ? uploadAvatar : undefined}
                 />
               </fieldset>
               <fieldset className={styles.checks}>

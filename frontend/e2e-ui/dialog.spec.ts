@@ -445,13 +445,13 @@ test("the measurements are the design's", async ({ page }) => {
 
   const widthOf = async (target: Locator) =>
     (await target.boundingBox())!.width;
-  expect(await widthOf(dialog)).toBe(520);
-  expect(await cssOf(dialog, "border-top-left-radius")).toBe("16px");
+  expect(await widthOf(dialog)).toBe(540);
+  expect(await cssOf(dialog, "border-top-left-radius")).toBe("24px");
   expect(await cssOf(dialog, "background-color")).toBe(
     await resolved(page, "background-color", "var(--ui-elev)"),
   );
   expect(await cssOf(dialog, "box-shadow")).toBe(
-    await resolved(page, "box-shadow", "var(--ui-elev-2)"),
+    await resolved(page, "box-shadow", "var(--ui-elev-3)"),
   );
 
   expect(await sidesOf(header(dialog), "padding")).toEqual([
@@ -496,7 +496,7 @@ test("the measurements are the design's", async ({ page }) => {
   expect(frame!.y + frame!.height / 2).toBeCloseTo(viewport.height / 2, 0);
 });
 
-test("the sizes are 400, 520 and 720 and never wider than the window less 32px", async ({
+test("the sizes are 400, 540 and 720 and never wider than the window less 32px", async ({
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });

@@ -135,7 +135,7 @@ def notice(d, workspace, message, reason, *, source_key):
         TeamMessage(
             workspace_id=workspace.id,
             channel_id=message.channel_id,
-            thread_id=message.thread_id or message.id,
+            thread_id=message.thread_id,
             kind="budget",
             data={"reason": reason},
             mentions=[human] if human else [],

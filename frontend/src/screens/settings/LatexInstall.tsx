@@ -5,6 +5,7 @@ import type { MessageKey } from "../../i18n/i18n";
 import { serviceReason } from "../../reader/service-error";
 import { Button, Spinner } from "../../ui";
 import styles from "./LayoutInstall.module.css";
+import settingsStyles from "./Settings.module.css";
 
 /** `GET /api/v1/latex-install`: the on-demand Tectonic install of the local build. */
 export interface LatexInstallState {
@@ -98,7 +99,11 @@ export function LatexInstall({
         {error}
       </p>
     ) : (
-      <div role="status" aria-label={t("common.loading")}>
+      <div
+        className={compact ? undefined : settingsStyles.settingDetails}
+        role="status"
+        aria-label={t("common.loading")}
+      >
         <Spinner />
       </div>
     );
@@ -108,7 +113,9 @@ export function LatexInstall({
   return (
     <Wrapper
       className={
-        compact ? `${styles.section} ${styles.compact}` : styles.section
+        compact
+          ? `${styles.section} ${styles.compact}`
+          : `${styles.section} ${settingsStyles.settingDetails}`
       }
       aria-label={compact ? undefined : t("settings.latexInstall.title")}
     >

@@ -86,6 +86,53 @@ test("the library starts as a list, opens paper cards on request and remembers e
   await expect(library.locator("[data-view=grid]")).toBeVisible();
 });
 
+test("the source column abbreviates conferences and keeps source capitalization", async ({
+  page,
+}) => {
+  await signIn(page);
+  const stamp = Date.now().toString(36);
+  const examples = [
+    ["neural information processing systems", "NeurIPS"],
+    ["conference on empirical methods in natural language processing", "EMNLP"],
+    ["eLife", "eLife"],
+    ["journal of unusual results", "Journal Of Unusual Results"],
+  ];
+  const records: Record<
+    string,
+    { paper_id: string; status: "ok"; venue: string }
+  > = {};
+  const papers = [];
+  for (const [venue, label] of examples) {
+    const paper = await createPaperWithPdf(page, {
+      title: `${label} ${stamp}`,
+    });
+    records[paper.paperId] = { paper_id: paper.paperId, status: "ok", venue };
+    papers.push({ id: paper.paperId, venue, label });
+  }
+  await page.route("**/api/v1/paper-metadata", (route) =>
+    route.fulfill({ json: records }),
+  );
+  await page.goto(LIBRARY);
+  const library = page.getByRole("main");
+  await library.getByRole("searchbox", { name: "搜索文库" }).fill(stamp);
+  await expect(
+    library.getByRole("columnheader", { name: "来源", exact: true }),
+  ).toBeVisible();
+  for (const { id, label } of papers) {
+    const source = library
+      .locator(`[data-paper="${id}"]`)
+      .getByRole("cell")
+      .nth(1);
+    await expect(source).toHaveText(label);
+    await expect(source).toHaveAttribute("title", label);
+  }
+  // Formatting belongs to the view: API records still contain their source text.
+  const response = await page.evaluate(async () =>
+    (await fetch("/api/v1/paper-metadata")).json(),
+  );
+  for (const { id, venue } of papers) expect(response[id].venue).toBe(venue);
+});
+
 test("the list shows when a paper was last opened", async ({ page }) => {
   await signIn(page);
   const stamp = Date.now().toString(36);
@@ -232,7 +279,7 @@ test("the reader's menu opens the same details", async ({ page }) => {
   await page.getByRole("menuitem", { name: "论文详情" }).click();
   const sheet = page.getByRole("dialog", { name: "论文详情" });
   await expect(sheet).toContainText(paper.title);
-  await expect(sheet.getByText("2 页")).toBeVisible();
+  await expect(sheet.getByText(/^2 页 ·/)).toBeVisible();
 });
 
 test("covers come from the thumbnail route and the PDF itself is not downloaded", async ({
@@ -249,16 +296,15 @@ test("covers come from the thumbnail route and the PDF itself is not downloaded"
     pages: 3,
   });
   const contents: string[] = [];
-  const covers: string[] = [];
   page.on("request", (request) => {
     const url = new URL(request.url());
     if (/\/files\/[^/]+\/content$/.test(url.pathname))
       contents.push(url.pathname);
-    if (/\/files\/[^/]+\/thumbnail$/.test(url.pathname))
-      covers.push(url.pathname);
   });
-  const response = page.waitForResponse(/\/thumbnail$/);
-  await page.goto(LIBRARY);
+  const thumbnailPath = `/api/v1/files/${paper.fileId}/thumbnail`;
+  const thumbnailUrl = new URL(thumbnailPath, page.url()).href;
+  const response = page.waitForResponse(thumbnailUrl);
+  await page.goto(`${LIBRARY}?q=${stamp}`);
   await page
     .getByRole("radiogroup", { name: "视图" })
     .getByRole("radio", { name: "卡片" })
@@ -267,29 +313,40 @@ test("covers come from the thumbnail route and the PDF itself is not downloaded"
     .getByRole("main")
     .locator(`[data-paper="${paper.paperId}"]`);
   const image = card.locator('img[data-thumb="image"]');
-  await expect(image).toHaveAttribute("src", /\/thumbnail$/);
+  await expect(image).toHaveAttribute("src", thumbnailPath);
   await expect
-    .poll(() => image.evaluate((el: HTMLImageElement) => el.naturalWidth))
-    .toBeGreaterThan(0);
+    .poll(() =>
+      image.evaluate(
+        (el: HTMLImageElement) => el.complete && el.naturalWidth > 0,
+      ),
+    )
+    .toBe(true);
   const headers = (await response).headers();
   expect(headers["content-type"]).toBe("image/jpeg");
   expect(headers["cache-control"]).toContain("immutable");
   expect(headers["cache-control"]).not.toContain("public");
   // A reload reuses the browser's copy of the picture.
   await page.reload();
-  await page.goto(LIBRARY);
-  await expect(image).toHaveAttribute("src", /\/thumbnail$/);
+  await expect(image).toHaveAttribute("src", thumbnailPath);
   await expect
-    .poll(() => image.evaluate((el: HTMLImageElement) => el.naturalWidth))
-    .toBeGreaterThan(0);
-  const cached = await page.evaluate(() =>
-    performance
-      .getEntriesByType("resource")
-      .filter((e) => e.name.endsWith("/thumbnail"))
-      .map((e) => (e as PerformanceResourceTiming).transferSize),
-  );
-  expect(cached.length).toBeGreaterThan(0);
-  expect(cached, JSON.stringify(cached)).toEqual(cached.map(() => 0));
+    .poll(() =>
+      image.evaluate(
+        (el: HTMLImageElement) => el.complete && el.naturalWidth > 0,
+      ),
+    )
+    .toBe(true);
+  // Wait for this cover's completed timing entry, not every thumbnail on the page.
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (url) =>
+          performance
+            .getEntriesByName(url, "resource")
+            .map((e) => (e as PerformanceResourceTiming).transferSize),
+        thumbnailUrl,
+      ),
+    )
+    .toEqual([0]);
   expect(contents).toEqual([]);
   await context.close();
 });

@@ -38,6 +38,7 @@ export function memberDraft(m?: Partial<MemberConfig>): MemberConfig {
     tools: m?.tools ? [...m.tools] : null,
     wake_minutes: m?.wake_minutes ?? 0,
     avatar_color: m?.avatar_color ?? "blue",
+    avatar: m?.avatar ?? "",
     role_description: m?.role_description ?? "",
     model_config_id: m?.model_config_id ?? "",
     permissions: structuredClone(m?.permissions ?? defaultPermissions),
@@ -104,6 +105,19 @@ export function validMember(draft: MemberConfig) {
 }
 export const initials = (name: string) =>
   Array.from(name.trim()).slice(0, 2).join("").toLocaleUpperCase();
+
+export function memberAvatarSeed(m: Partial<TeamMember>) {
+  if (m.avatar?.startsWith("pixel:")) return m.avatar.slice(6);
+  return (
+    m.avatar_seed ??
+    (m.role === "human"
+      ? m.id
+      : m.role && !m.role.startsWith("custom")
+        ? m.role
+        : (m.file_path?.split("/").pop()?.replace(/\.md$/, "") ?? m.name)) ??
+    ""
+  );
+}
 
 export function documentDraft(
   document: { source: string; config: MemberConfig & { channels?: string[] } },

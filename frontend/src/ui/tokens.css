@@ -10,6 +10,10 @@
  */
 :root {
   color-scheme: light;
+  font-feature-settings: "cv11", "ss03", "calt";
+  font-optical-sizing: auto;
+  font-synthesis-weight: none;
+  text-autospace: normal;
 
   /* Surfaces */
   --ui-bg: #fefdfc; /* cards */
@@ -36,6 +40,12 @@
   /* The paper being read */
   --ui-highlight: rgba(250, 204, 21, 0.32); /* a marker pen */
   --ui-selection: rgba(28, 99, 191, 0.18);
+  --ui-own-message: rgba(
+    28,
+    99,
+    191,
+    0.1
+  ); /* the researcher's own chat bubbles */
   --ui-page-filter: none; /* a hook to tint the PDF paper; none in either theme */
   --ui-paper: #ffffff; /* a PDF page before it is drawn: white, as pdf.js paints it, in both themes */
 
@@ -44,6 +54,7 @@
   --ui-shadow-k: 1; /* shadow strength */
   --ui-edge-k1: 6%; /* mix of the two hairline strengths */
   --ui-edge-k2: 10%;
+  --ui-edge-k3: 16%;
 
   /* Derived from the primaries */
   --ui-edge-subtle: color-mix(
@@ -52,22 +63,38 @@
     transparent
   );
   --ui-edge: color-mix(in oklab, var(--ui-fg) var(--ui-edge-k2), transparent);
+  --ui-edge-strong: color-mix(
+    in oklab,
+    var(--ui-fg) var(--ui-edge-k3),
+    transparent
+  );
   --ui-hover: color-mix(in oklab, var(--ui-fg) 5%, transparent);
+  --ui-active: color-mix(in oklab, var(--ui-fg) 12%, transparent); /* pressed */
   --ui-selected: color-mix(in oklab, var(--ui-fg) 8%, transparent);
   --ui-fill: color-mix(in oklab, var(--ui-fg) 4%, transparent);
   --ui-accent-soft: color-mix(in oklab, var(--ui-fg) 7%, transparent);
   --ui-danger-soft: color-mix(in oklab, var(--ui-danger) 14%, transparent);
+  --ui-diff-add: color-mix(in oklab, var(--ui-success-text) 13%, transparent);
+  --ui-diff-del: color-mix(in oklab, var(--ui-danger-text) 11%, transparent);
   /* Neutral, one quiet ring: focus is shown, never decorated. */
   --ui-focus-ring: 0 0 0 3px color-mix(in oklab, var(--ui-fg) 14%, transparent);
+  --ui-ring-1: 0 0 0 1px var(--ui-edge-subtle);
+  --ui-ring-2: 0 0 0 1px var(--ui-edge);
   --ui-elev-1:
-    0 0 0 1px var(--ui-edge-subtle),
+    var(--ui-ring-1),
     0 1px 2px rgb(var(--ui-shade) / calc(0.05 * var(--ui-shadow-k)));
   --ui-elev-2:
-    0 0 0 1px var(--ui-edge),
+    var(--ui-ring-2),
+    0 1px 2px rgb(var(--ui-shade) / calc(0.06 * var(--ui-shadow-k))),
     0 4px 12px -2px rgb(var(--ui-shade) / calc(0.09 * var(--ui-shadow-k))),
     0 14px 36px -10px rgb(var(--ui-shade) / calc(0.14 * var(--ui-shadow-k)));
+  --ui-elev-3:
+    var(--ui-ring-2),
+    0 1px 3px rgb(var(--ui-shade) / calc(0.07 * var(--ui-shadow-k))),
+    0 8px 20px -4px rgb(var(--ui-shade) / calc(0.1 * var(--ui-shadow-k))),
+    0 28px 72px -16px rgb(var(--ui-shade) / calc(0.22 * var(--ui-shadow-k)));
   --ui-elev-composer:
-    0 0 0 1px var(--ui-edge),
+    var(--ui-ring-2),
     0 2px 4px rgb(var(--ui-shade) / calc(0.04 * var(--ui-shadow-k))),
     0 12px 28px -12px rgb(var(--ui-shade) / calc(0.16 * var(--ui-shadow-k)));
 
@@ -78,6 +105,7 @@
   --ui-r-10: 10px;
   --ui-r-12: 12px;
   --ui-r-16: 16px;
+  --ui-r-18: 18px; /* message bubbles */
   --ui-r-20: 20px;
   --ui-r-24: 24px;
   --ui-r-pill: 999px;
@@ -110,6 +138,7 @@
   --ui-leading-tight: 1.3;
   --ui-leading: 1.55;
   --ui-leading-loose: 1.7; /* papers and long answers */
+  --ui-leading-prose: 1.73; /* 15 / 26: conversation prose */
   --ui-weight-regular: 400;
   --ui-weight-strong: 600;
   --ui-font-sans:
@@ -130,21 +159,22 @@
 
   /* App layouts */
   --ui-page-width: 960px;
-  --ui-conversation-width: 760px;
+  --ui-conversation-width: 720px;
+  --ui-home-width: 768px;
   --ui-search-width: 220px;
   --ui-card-min: 220px;
   --ui-dialog-sm: 400px;
-  --ui-dialog-md: 520px;
+  --ui-dialog-md: 540px;
   --ui-dialog-lg: 720px;
   --ui-sheet-width: 460px;
   --ui-settings-width: 1100px;
   --ui-settings-height: 820px;
-  --ui-settings-nav: 240px;
+  --ui-settings-nav: 260px;
   --ui-rail-width: 52px;
   --ui-window-top: 44px;
-  --ui-sidebar-width: 288px;
+  --ui-sidebar-width: 264px;
   --ui-reader-sidebar-width: 220px;
-  --ui-sidebar-top: 56px;
+  --ui-sidebar-top: 52px;
   --ui-card-header-height: 52px;
   --ui-switch-width: 32px;
   --ui-switch-height: 20px;
@@ -161,6 +191,8 @@
   --ui-dur-3: 260ms;
   --ui-ease-out: cubic-bezier(0.2, 0, 0, 1);
   --ui-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ui-ease-snappy: cubic-bezier(0.23, 1, 0.32, 1);
+  --ui-press: scale(0.98);
 }
 
 :root[data-theme="dark"] {
@@ -188,6 +220,7 @@
 
   --ui-highlight: rgba(234, 179, 8, 0.28);
   --ui-selection: rgba(128, 182, 251, 0.32);
+  --ui-own-message: rgba(128, 182, 251, 0.18);
   /* The paper looks the same in both themes. */
   --ui-page-filter: none;
 
@@ -195,6 +228,11 @@
   --ui-shadow-k: 3;
   --ui-edge-k1: 7%;
   --ui-edge-k2: 11%;
+  --ui-edge-k3: 18%;
+  --ui-ring-1:
+    inset 0 0 0 1px rgb(255 255 255 / 6%), 0 0 0 1px rgb(0 0 0 / 40%);
+  --ui-ring-2:
+    inset 0 0 0 1px rgb(255 255 255 / 10%), 0 0 0 1px rgb(0 0 0 / 50%);
 }
 
 /* Without the script that sets data-theme: only keeps the first paint from flashing white. */

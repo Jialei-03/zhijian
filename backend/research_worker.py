@@ -413,7 +413,7 @@ def _plan(app, d, project):
         return
     if (
         spec
-        and spec["max_rounds"]
+        and spec.get("max_rounds")
         and project.workflow_state["steps"][project.workflow_state["current"]]["rounds"]
         >= spec["max_rounds"]
     ):

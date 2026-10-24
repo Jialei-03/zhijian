@@ -152,7 +152,7 @@ export function SettingsWindow({
       <div className={styles.frame}>
         <nav className={styles.nav} aria-label={t("settings.title")}>
           <label className={styles.search}>
-            <Search size={15} aria-hidden />
+            <Search size={16} aria-hidden />
             <input
               ref={search}
               type="search"

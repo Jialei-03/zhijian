@@ -99,7 +99,7 @@ export function CloudSection() {
         />
       ) : !link.connected ? (
         <form
-          className={styles.cloudForm}
+          className={`${styles.card} ${styles.cloudForm}`}
           onSubmit={(event) => {
             event.preventDefault();
             void act(() =>
@@ -139,64 +139,67 @@ export function CloudSection() {
           </div>
         </form>
       ) : (
-        <>
-          <p className={styles.muted}>
-            {t("settings.cloud.connected", {
-              username: link.username ?? "",
-              origin: link.origin ?? "",
-              date: formatDate(link.expires ?? "", locale),
-            })}
-          </p>
-          <div className={styles.cloudActions}>
-            <Button
-              variant="primary"
-              disabled={busy}
-              loading={running}
-              onClick={() =>
-                void act(() =>
-                  api<Link>("/cloud-link/sync", { method: "POST" }),
-                )
-              }
-            >
-              {running
-                ? t("settings.cloud.syncingButton")
-                : t("settings.cloud.sync")}
-            </Button>
-            <Button
-              variant="ghost"
-              disabled={busy || running}
-              onClick={() =>
-                void act(() => api<Link>("/cloud-link", { method: "DELETE" }))
-              }
-            >
-              {t("settings.cloud.disconnect")}
-            </Button>
-          </div>
-          {running && <SyncProgress sync={link.sync} />}
-          {link.sync.error && (
-            <p role="alert" className={styles.error}>
-              {link.sync.error}
+        <div className={styles.card}>
+          <div className={styles.settingDetails}>
+            <p className={styles.muted}>
+              {t("settings.cloud.connected", {
+                username: link.username ?? "",
+                origin: link.origin ?? "",
+                date: formatDate(link.expires ?? "", locale),
+              })}
             </p>
-          )}
-          {last && !running && (
-            <div aria-live="polite">
-              <p className={styles.muted}>
-                {t("settings.cloud.result", {
-                  date: formatDate(last.finished_at, locale),
-                  downloaded: last.downloaded,
-                  uploaded: last.uploaded,
-                })}
-                {last.without_pdf > 0 &&
-                  " " + t("settings.cloud.withoutPdf", { n: last.without_pdf })}
-              </p>
-              {last.errors.map((line) => (
-                <p key={line} role="alert" className={styles.error}>
-                  {line}
-                </p>
-              ))}
+            <div className={styles.cloudActions}>
+              <Button
+                variant="primary"
+                disabled={busy}
+                loading={running}
+                onClick={() =>
+                  void act(() =>
+                    api<Link>("/cloud-link/sync", { method: "POST" }),
+                  )
+                }
+              >
+                {running
+                  ? t("settings.cloud.syncingButton")
+                  : t("settings.cloud.sync")}
+              </Button>
+              <Button
+                variant="ghost"
+                disabled={busy || running}
+                onClick={() =>
+                  void act(() => api<Link>("/cloud-link", { method: "DELETE" }))
+                }
+              >
+                {t("settings.cloud.disconnect")}
+              </Button>
             </div>
-          )}
-        </>
+            {running && <SyncProgress sync={link.sync} />}
+            {link.sync.error && (
+              <p role="alert" className={styles.error}>
+                {link.sync.error}
+              </p>
+            )}
+            {last && !running && (
+              <div aria-live="polite">
+                <p className={styles.muted}>
+                  {t("settings.cloud.result", {
+                    date: formatDate(last.finished_at, locale),
+                    downloaded: last.downloaded,
+                    uploaded: last.uploaded,
+                  })}
+                  {last.without_pdf > 0 &&
+                    " " +
+                      t("settings.cloud.withoutPdf", { n: last.without_pdf })}
+                </p>
+                {last.errors.map((line) => (
+                  <p key={line} role="alert" className={styles.error}>
+                    {line}
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </Section>
   );

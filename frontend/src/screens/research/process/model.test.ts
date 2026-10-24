@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createTranslator } from "../../../i18n/i18n";
 import {
   current,
   jobReport,
@@ -12,6 +13,46 @@ import {
   target,
   type RunStep,
 } from "./model";
+
+it("localizes short durations at seconds, minutes and hours without capping them", () => {
+  for (const [locale, expected] of [
+    [
+      "zh",
+      [
+        "0 秒",
+        "59 秒",
+        "1 分 0 秒",
+        "1 分 30 秒",
+        "59 分 59 秒",
+        "1 小时 0 分",
+        "2 小时 37 分",
+        "1 小时 53 分",
+        "48 小时 0 分",
+      ],
+    ],
+    [
+      "en",
+      [
+        "0s",
+        "59s",
+        "1m 0s",
+        "1m 30s",
+        "59m 59s",
+        "1h 0m",
+        "2h 37m",
+        "1h 53m",
+        "48h 0m",
+      ],
+    ],
+  ] as const) {
+    const { t } = createTranslator(locale);
+    expect(
+      [0, 59, 60, 90, 3599, 3600, 9408, 6758, 172800].map((s) =>
+        shortDuration(s, t),
+      ),
+    ).toEqual(expected);
+  }
+});
 
 const step = (
   name: string,

@@ -70,6 +70,7 @@ class WorkspaceInput(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=4000)
     location: dict = Field(default_factory=lambda: {"kind": "managed"})
+    create_folder: bool = False
 
 
 class WorkspacePatch(BaseModel):
@@ -399,7 +400,13 @@ def install_research_routes(app, settings, db, auth, human, owned):
         try:
             from .research_locations import validate_location
 
-            location = validate_location(settings, body.location)
+            if not body.name.strip():
+                raise ValueError("项目名称不能为空")
+            location = validate_location(
+                settings,
+                body.location,
+                create_folder=body.name.strip() if body.create_folder else "",
+            )
             if location["kind"] in {"local", "ssh"}:
                 # A physical folder has one admission lock. Serialize creation
                 # before checking identity, including concurrent first requests.
@@ -430,7 +437,7 @@ def install_research_routes(app, settings, db, auth, human, owned):
             from .research_team import ensure as ensure_team
 
             ensure_team(d, w)
-        except ValueError as e:
+        except (ValueError, OSError) as e:
             raise HTTPException(422, str(e)) from None
         d.commit()
         from .research_locations import location_for

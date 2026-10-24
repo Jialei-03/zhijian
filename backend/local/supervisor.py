@@ -7,6 +7,7 @@ import threading
 import time
 
 from ..parent_watch import ENV as PARENT_ENV
+from .logs import handler, write
 
 _status = {}
 _lock = threading.Lock()
@@ -25,7 +26,10 @@ def _set(name, value):
 class Supervisor:
     """Starts workers, restarts the ones that exit (with backoff, capped)."""
 
-    def __init__(self, names, cwd, log=print, max_restarts=5, backoff=1.0, healthy_after=60.0, poll=0.5):
+    def __init__(
+        self, names, cwd, *, log_dir, log=print, max_restarts=5,
+        backoff=1.0, healthy_after=60.0, poll=0.5,
+    ):
         self.names = tuple(names)
         self.cwd = cwd
         self.log = log
@@ -34,23 +38,49 @@ class Supervisor:
         self.healthy_after = healthy_after
         self.poll = poll
         self.processes = {}
+        self.log_dir = log_dir
+        self._outputs = {}
+        self._readers = []
+        self._logs_closed = threading.Event()
         self._stop = threading.Event()
         self._thread = None
         with _lock:
             _status.clear()
 
     def _spawn(self, name):
-        env = {**os.environ, PARENT_ENV: str(os.getpid())}
+        if name not in self._outputs:
+            self._outputs[name] = handler(self.log_dir, name)
+        env = {**os.environ, PARENT_ENV: str(os.getpid()), "PYTHONUNBUFFERED": "1"}
         process = subprocess.Popen(
             [sys.executable, "-m", "backend." + name],
             cwd=self.cwd,
             env=env,
             stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
             start_new_session=True,
         )
+        reader = threading.Thread(
+            target=self._read_output,
+            args=(name, process.stdout),
+            name=f"{name}-logs",
+            daemon=True,
+        )
+        self._readers.append(reader)
+        reader.start()
         self.processes[name] = process
         _set(name, "running")
         return process
+
+    def _read_output(self, name, stream):
+        with stream:
+            for line in stream:
+                if self._logs_closed.is_set():
+                    break
+                write(self._outputs[name], line.rstrip("\r\n"))
 
     def start(self):
         for name in self.names:
@@ -103,3 +133,8 @@ class Supervisor:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
+        for reader in self._readers:
+            reader.join(timeout=5)
+        self._logs_closed.set()
+        for output in self._outputs.values():
+            output.close()

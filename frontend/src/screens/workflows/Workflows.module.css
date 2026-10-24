@@ -8,8 +8,9 @@
   flex-wrap: wrap;
 }
 .manager header h1 {
+  font-family: var(--ui-font-display);
   font-size: var(--ui-text-24);
-  font-weight: var(--ui-weight-strong);
+  font-weight: var(--ui-weight-regular);
 }
 .manager header input {
   font-size: var(--ui-text-13);
@@ -18,7 +19,8 @@
   display: inline-flex;
   align-items: center;
   gap: var(--ui-space-6);
-  padding: var(--ui-space-4) var(--ui-space-8);
+  height: var(--ui-control-sm);
+  padding: 0 var(--ui-space-8);
   min-width: 0;
   border: 0;
   border-radius: var(--ui-r-8);

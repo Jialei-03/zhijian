@@ -8,7 +8,8 @@ from copy import deepcopy
 import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from sqlalchemy import inspect, select
+from sqlalchemy import create_engine, inspect, select
+from sqlalchemy.orm import Session
 
 from backend import research_repo, research_sandbox, research_stages
 from backend import research_worker as worker
@@ -17,9 +18,11 @@ from backend.agent_tools import execute
 from backend.agent_worker import research_tools
 from backend.models import (
     AgentRun,
+    Base,
     ResearchProject,
     ResearchSprint,
     ResearchWorkflow,
+    ResearchWorkspace,
 )
 from backend.tests.test_research_worker import (  # noqa: F401
     cloud_env,
@@ -30,6 +33,109 @@ from backend.tests.test_research_worker import (  # noqa: F401
 )
 
 BASE = "/api/v1/research/workflows"
+
+
+@pytest.mark.parametrize("source", ["library", "active", "saved", "project"])
+def test_workflow_deduplication_on_stored_reads(source):
+    """Read old JSON through the real adapters, without a runner or repository."""
+    from backend import team_rules, team_workflows
+
+    flow = team_rules.builtin_workflows()["research"]
+    routing = team_rules.initial_state(flow)["linear"].pop(team_workflows.key(flow))
+    if source == "library":
+        flow.update(id="stored", builtin=False)
+    wk = team_workflows.key(flow)
+    original = next(r for r in flow["rules"] if r["id"] == "research:approved-start")
+    edited = {
+        **deepcopy(original),
+        "id": "research:0:approved",
+        "enabled": False,
+        "limit": {"per_thread": 7},
+        "position": {"x": 10, "y": 20},
+    }
+    flow["rules"].append(edited)
+    routing[original["id"]] = {"from": "start", "to": "step:1"}
+    routing[edited["id"]] = {"from": "confirm:0", "to": "step:1"}
+    initial = {"linear": {wk: routing}}
+    execution = {"steps": [{"name": "Owner's step", "outputs": ["evidence.md"]}]}
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    try:
+        with Session(engine) as d:
+            if source == "library":
+                row = ResearchWorkflow(
+                    id=flow["id"],
+                    owner="owner",
+                    name=flow["name"],
+                    version=1,
+                    definition={
+                        **flow,
+                        "initial_state": initial,
+                        "execution": execution,
+                    },
+                )
+            elif source == "project":
+                row = ResearchProject(
+                    owner="owner",
+                    question="Question",
+                    model_config_id="unused",
+                    session_id="unused",
+                    workflow=flow,
+                    workflow_state={"rule_state": initial, "execution": execution},
+                )
+            else:
+                row = ResearchWorkspace(
+                    owner="owner",
+                    name="Team",
+                    workflow=flow
+                    if source == "active"
+                    else {**flow, "id": "other", "rules": []},
+                    workflow_state={**initial, "definitions": {flow["id"]: flow}},
+                )
+            d.add(row)
+            d.commit()
+
+            def read():
+                if source == "project":
+                    workflows.adopt_project(d, row)
+                    return row.workflow
+                return team_workflows.definition(
+                    d,
+                    "owner",
+                    flow["id"],
+                    workspace=row if source != "library" else None,
+                )
+
+            for _ in range(2):
+                result = read()
+                matches = [
+                    r
+                    for r in result["rules"]
+                    if r["when"] == original["when"] and r["then"] == original["then"]
+                ]
+                assert matches == [edited]
+                d.commit()
+                d.refresh(row)
+            stored_state = (
+                row.definition["initial_state"]
+                if source == "library"
+                else row.workflow_state["rule_state"]
+                if source == "project"
+                else row.workflow_state
+            )
+            assert original["id"] not in stored_state["linear"][wk]
+            assert {
+                r["from"]
+                for r in team_rules.route_options(
+                    stored_state["linear"][wk][edited["id"]]
+                )
+            } == {"start", "confirm:0"}
+            if source == "library":
+                assert row.definition["execution"] == execution
+            if source == "project":
+                assert row.workflow_state["execution"] == execution
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture

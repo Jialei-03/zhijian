@@ -34,14 +34,12 @@ class StepInput(Strict):
     instructions: str = Field(default="", max_length=20000)
     outputs: list[str] = Field(default_factory=list, max_length=30)
     confirmation: bool = False
-    max_rounds: int | None = Field(default=None, ge=1, le=200)
-    max_retries: int = Field(default=2, ge=0, le=10)
+    max_rounds: int | None = Field(default=None, ge=0, le=200)
+    max_retries: int = Field(default=0, ge=0, le=10)
     action: Literal["child_research", "conclusion", "retrospective"] | None = None
 
     @model_validator(mode="after")
     def defaults(self):
-        if self.type in {"agent", "review"} and self.max_rounds is None:
-            self.max_rounds = 3
         if self.type != "agent":
             self.action = None
         return self
@@ -124,7 +122,7 @@ BUILTINS = {
         "legacy": True,
         "steps": [
             step("定题", "plan", stage="scoping"),
-            step("实验", "experiment", stage="experiments", max_rounds=200),
+            step("实验", "experiment", stage="experiments"),
             step(
                 "结论",
                 "agent",
@@ -147,7 +145,7 @@ BUILTINS = {
         "name": "复现一篇论文",
         "steps": [
             step("选定论文", "plan", "说清复现哪个结果、怎么算成功。"),
-            step("复现实验", "experiment", max_rounds=200),
+            step("复现实验", "experiment"),
             step(
                 "对比报告",
                 "agent",
@@ -193,6 +191,17 @@ def adopt_project(d, project):
     from .team_workflows import pack
 
     if "rules" in (project.workflow or {}):
+        from .team_rules import deduplicate_workflow
+
+        flow, state = deduplicate_workflow(
+            project.workflow, (project.workflow_state or {}).get("rule_state")
+        )
+        if flow != project.workflow:
+            project.workflow = flow
+            project.workflow_state = {
+                **(project.workflow_state or {}),
+                "rule_state": state,
+            }
         return
     original = project.workflow or {
         "id": "research",

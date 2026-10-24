@@ -3,12 +3,17 @@
 EFFORTS = ["default", "low", "medium", "high", "xhigh", "max"]
 
 
+def model_key(config):
+    """The model as these tables know it: a release and its preview behave alike."""
+    return config.get("model", "").lower().removesuffix("-preview")
+
+
 def controls(config):
-    model = config.get("model", "").lower()
+    model = model_key(config)
     modes = ["default", "disabled", "adaptive"]
     efforts = EFFORTS
     note = ""
-    if model == "minimax-m3.1-flash-preview":
+    if model == "minimax-m3.1-flash":
         modes = ["default", "adaptive"]
         note = "此模型必须思考，可通过 effort 调整强度。"
     elif model == "minimax-m3":
@@ -53,7 +58,7 @@ ARTIFACT_TASKS = {
 # provider never advertised risks a rejected request, so anything else keeps
 # the saved preference.
 LOWEST = {
-    "minimax-m3.1-flash-preview": {
+    "minimax-m3.1-flash": {
         "thinking_mode": "default",
         "reasoning_effort": "low",
     },
@@ -73,7 +78,7 @@ def task_of(*, artifact=None, action=None):
 # default thinks far longer than these need (a guide took 153 s by default, 38 s
 # at medium and 18 s at low; explaining a passage 19-30 s, 14 s and 10 s).
 UNCHOSEN = {
-    "minimax-m3.1-flash-preview": {
+    "minimax-m3.1-flash": {
         "analyze": {"thinking_mode": "default", "reasoning_effort": "low"},
         "chat": {"thinking_mode": "default", "reasoning_effort": "medium"},
     },
@@ -83,7 +88,7 @@ UNCHOSEN = {
 def task_options(config, task="chat"):
     """The inference options a job of this kind should use with this model."""
     task = ARTIFACT_TASKS.get(task, task)
-    model = config.get("model", "").lower()
+    model = model_key(config)
     if task in FAST and model in LOWEST:
         return dict(LOWEST[model])
     chosen = options(config)

@@ -37,7 +37,10 @@ export function ModelsSection() {
   const { t, tn } = i18n;
   const [settings, setSettings] = useState<ModelSettings | null>(null);
   const [loadError, setLoadError] = useState("");
-  const [adding, setAdding] = useState(false);
+  const [returnTo] = useState(() =>
+    new URLSearchParams(window.location.hash.split("?")[1]).get("returnTo"),
+  );
+  const [adding, setAdding] = useState(!!returnTo);
   const [importing, setImporting] = useState(false);
   const [renaming, setRenaming] = useState<ModelRow | null>(null);
   const [newName, setNewName] = useState("");
@@ -255,6 +258,7 @@ export function ModelsSection() {
             tone: "success",
             message: tn("settings.import.done", count),
           });
+          if (returnTo && next.models.length) window.location.hash = returnTo;
         }}
       />
       <Dialog
@@ -325,6 +329,7 @@ export function ModelsSection() {
                 tone: "success",
                 message: t("settings.models.added", { name: model }),
               });
+              if (returnTo) window.location.hash = returnTo;
             }}
           />
         )}

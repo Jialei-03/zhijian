@@ -73,7 +73,7 @@ async function openTranslated(page: Page, start: Partial<Install> = {}) {
     .getByRole("radio", { name: "译文", exact: true })
     .click();
   await expect(
-    panel(page).getByText("这台服务还没有配置版面翻译"),
+    panel(page).getByText("未配置版面翻译", { exact: true }),
   ).toBeVisible();
   return service;
 }

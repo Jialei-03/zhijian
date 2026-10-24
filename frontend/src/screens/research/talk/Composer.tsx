@@ -2,8 +2,15 @@ import { ArrowUp, Plus } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { useI18n } from "../../../i18n/I18nProvider";
 import type { SlashCommand } from "../../../lib/slash";
-import { Menu, useSlashCommands } from "../../../ui";
+import {
+  Button,
+  IconButton,
+  Menu,
+  Tooltip,
+  useSlashCommands,
+} from "../../../ui";
 import { INSERT_EVENT, type InsertDetail } from "../files/files-api";
+import { AddModelButton, openModelSetup } from "../../setup/ModelSetup";
 import styles from "./Talk.module.css";
 
 /**
@@ -21,6 +28,7 @@ export function Composer({
   busy = false,
   disabled = false,
   sendDisabled = false,
+  needsModel = false,
   autoFocus = false,
   tools,
   leading,
@@ -39,6 +47,8 @@ export function Composer({
   busy?: boolean;
   disabled?: boolean;
   sendDisabled?: boolean;
+  /** The settings were read successfully and contain no models. */
+  needsModel?: boolean;
   autoFocus?: boolean;
   /** Pickers beside the send button (model, compute). */
   tools?: ReactNode;
@@ -86,7 +96,7 @@ export function Composer({
     value.trim().length > 0 &&
     !busy &&
     !disabled &&
-    !sendDisabled &&
+    (!sendDisabled || needsModel) &&
     !commandsOnly;
   // Actions that need text stay in the slash palette. These run without
   // replacing an unsent draft, and model choices already have their picker.
@@ -95,7 +105,9 @@ export function Composer({
   );
   const send = () => {
     if (slash.submit()) return;
-    if (ready) onSend();
+    if (!ready) return;
+    if (needsModel) openModelSetup();
+    else onSend();
   };
   return (
     <form
@@ -142,30 +154,30 @@ export function Composer({
                 onSelect: () => void command.run(""),
               }))}
               trigger={(props) => (
-                <button
-                  type="button"
-                  className={styles.composerAction}
-                  aria-label={t("research.composer.actions")}
+                <IconButton
+                  icon={Plus}
+                  className={styles.plus}
+                  label={t("research.composer.actions")}
                   disabled={disabled}
                   {...props}
-                >
-                  <Plus size={20} strokeWidth={1.8} aria-hidden />
-                </button>
+                />
               )}
             />
           )}
           {status && <span className={styles.composerStatus}>{status}</span>}
         </div>
         <div className={styles.composerEnd}>
-          {tools}
-          <button
-            type="submit"
-            className={styles.send}
-            disabled={!ready}
-            aria-label={sendLabel}
-          >
-            <ArrowUp size={19} strokeWidth={2} aria-hidden />
-          </button>
+          {needsModel ? <AddModelButton disabled={busy || disabled} /> : tools}
+          <Tooltip content={sendLabel}>
+            <Button
+              type="submit"
+              variant={needsModel ? "secondary" : "primary"}
+              icon={ArrowUp}
+              className={styles.send}
+              disabled={!ready}
+              aria-label={sendLabel}
+            />
+          </Tooltip>
         </div>
       </div>
     </form>

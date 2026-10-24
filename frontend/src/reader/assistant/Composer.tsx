@@ -495,7 +495,7 @@ export function Composer({
         {unavailable && !assistant.loading ? (
           <p className={styles.hint}>
             {t("reader.assistant.noModel")}{" "}
-            <a className={styles.settings} href="#settings">
+            <a className={styles.settings} href="#customize/models">
               {t("reader.assistant.toSettings")}
             </a>
           </p>

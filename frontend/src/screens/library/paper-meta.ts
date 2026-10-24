@@ -1,9 +1,97 @@
 import type { Paper } from "../../api";
 import type { PaperMetadata } from "../../lib/cite";
 
+// Display aliases only: keep the bibliographic record and exported citations intact.
+const VENUES = [
+  [
+    "NeurIPS",
+    "NIPS",
+    "Neural Information Processing Systems",
+    "Advances in Neural Information Processing Systems",
+  ],
+  ["ICML", "International Conference on Machine Learning"],
+  ["ICLR", "International Conference on Learning Representations"],
+  [
+    "ACL",
+    "Association for Computational Linguistics",
+    "Annual Meeting of the Association for Computational Linguistics",
+  ],
+  [
+    "EMNLP",
+    "Conference on Empirical Methods in Natural Language Processing",
+    "Empirical Methods in Natural Language Processing",
+  ],
+  [
+    "NAACL",
+    "North American Chapter of the Association for Computational Linguistics",
+    "Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies",
+  ],
+  [
+    "AAAI",
+    "AAAI Conference on Artificial Intelligence",
+    "Association for the Advancement of Artificial Intelligence",
+  ],
+  [
+    "CVPR",
+    "Conference on Computer Vision and Pattern Recognition",
+    "IEEE Conference on Computer Vision and Pattern Recognition",
+    "IEEE/CVF Conference on Computer Vision and Pattern Recognition",
+  ],
+  [
+    "ICCV",
+    "International Conference on Computer Vision",
+    "IEEE International Conference on Computer Vision",
+    "IEEE/CVF International Conference on Computer Vision",
+  ],
+  ["ECCV", "European Conference on Computer Vision"],
+  [
+    "KDD",
+    "Knowledge Discovery and Data Mining",
+    "ACM SIGKDD International Conference on Knowledge Discovery and Data Mining",
+    "ACM SIGKDD Conference on Knowledge Discovery and Data Mining",
+  ],
+  [
+    "WWW",
+    "World Wide Web Conference",
+    "International Conference on World Wide Web",
+    "The Web Conference",
+  ],
+  [
+    "SIGIR",
+    "International ACM SIGIR Conference on Research and Development in Information Retrieval",
+  ],
+  [
+    "CHI",
+    "Conference on Human Factors in Computing Systems",
+    "CHI Conference on Human Factors in Computing Systems",
+  ],
+  [
+    "UIST",
+    "ACM Symposium on User Interface Software and Technology",
+    "Symposium on User Interface Software and Technology",
+  ],
+] as const;
+
+function venueLabel(venue: string) {
+  const raw = venue.trim();
+  const key = raw.toLowerCase().replace(/\s+/g, " ");
+  const known = VENUES.find((names) =>
+    names.some((name) => name.toLowerCase() === key),
+  );
+  if (known) return known[0];
+  // Preserve source capitalization (e.g. eLife, IEEE); repair all-lowercase names.
+  return raw !== raw.toLowerCase()
+    ? raw
+    : raw.replace(
+        /(^|[^\p{L}\p{N}])(\p{L})/gu,
+        (_, before: string, letter: string) => before + letter.toUpperCase(),
+      );
+}
+
 export function paperSource(paper: Paper, meta?: PaperMetadata | null) {
   const known = meta?.status === "ok" ? meta : null;
-  if (known?.venue) return known.venue;
+  const venue = venueLabel(known?.venue ?? "");
+  if (venue) return venue;
   const ids = paperIds(paper.external_id);
   return ids.arxiv || known?.arxiv
     ? "arXiv"

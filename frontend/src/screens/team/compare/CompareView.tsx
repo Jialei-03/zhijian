@@ -3,6 +3,7 @@ import { useI18n } from "../../../i18n/I18nProvider";
 import type { MessageKey } from "../../../i18n/i18n";
 import { followLink } from "../../../reader/route";
 import { Button } from "../../../ui";
+import { shortDuration } from "../../research/process/model";
 import {
   differs,
   type Comparison,
@@ -57,9 +58,7 @@ export function CompareView({ comparison, onOpenResearch }: CompareViewProps) {
         differs(comparison.threads.map((thread) => thread[key])) || undefined
       }
     >
-      {key.endsWith("seconds")
-        ? t("compare.seconds", { n: format(value) })
-        : format(value)}
+      {key.endsWith("seconds") ? shortDuration(value, t) : format(value)}
     </strong>
   );
   const row = (
@@ -326,9 +325,7 @@ export function BatchResultsTable({
                         {t("compare.tokenCount", { n: format(thread.tokens) })}
                       </span>
                       <span className={styles.meta}>
-                        {t("compare.seconds", {
-                          n: format(thread.elapsed_seconds),
-                        })}
+                        {shortDuration(thread.elapsed_seconds, t)}
                       </span>
                     </>
                   ) : (

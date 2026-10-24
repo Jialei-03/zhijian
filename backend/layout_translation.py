@@ -15,6 +15,7 @@ import time
 import uuid
 from pathlib import Path
 
+from .model_options import model_key
 from .translation_dispatch import TaskExecutor
 from .translation_settings import complete
 
@@ -222,8 +223,7 @@ def translate_pdf(
                 "output_dir": str(output.resolve()),
                 "pages": pages,
                 "batch_tokens": 4000
-                if config.get("model", "").lower()
-                in {"minimax-m3", "minimax-m3.1-flash-preview"}
+                if model_key(config) in {"minimax-m3", "minimax-m3.1-flash"}
                 else 1000,
             }
         )

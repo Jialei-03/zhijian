@@ -177,8 +177,8 @@ export function guideView(state: {
   if (!artifact) {
     if (preparing(preparation))
       return { kind: "working", content: EMPTY_GUIDE };
-    if (preparation?.status === "failed")
-      return { kind: "failed", message: preparation.error };
+    if (preparation?.guide_status === "failed")
+      return { kind: "failed", message: "" };
   }
   return { kind: "idle", note: "", stopped: false };
 }

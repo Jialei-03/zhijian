@@ -50,7 +50,6 @@ def sync(d, item, *, remove=False):
                     "role": "advisor",
                     "instruction": item.prompt,
                 },
-                "limit": {"per_thread": 1000000},
                 **({"position": old["position"]} if old and "position" in old else {}),
             }
         )
@@ -174,7 +173,34 @@ def run_legacy(settings, d, item, at, *, manual=False):
             rule["then"]["action"] == "wake" and rule["then"].get("role") == "advisor"
         )
         project_id = item.research_id
-        if default_launch and item.destination == "new":
+        members, _ = flows.references(d, workspace)
+        advisor_paused = default_launch and any(
+            m["role"] == "advisor" and m.get("paused") for m in members
+        )
+        if advisor_paused:
+            actions = route(
+                d,
+                workspace,
+                rule,
+                at,
+                thread=f"research:{project_id}" if project_id else None,
+                manual=manual,
+            )
+            from .research_team import stable
+
+            message = TeamMessage(
+                workspace_id=workspace.id,
+                channel_id=rule["when"].get("channel")
+                or stable(workspace, "experiments"),
+                thread_id=f"research:{project_id}" if project_id else None,
+                text=item.prompt,
+                kind="text",
+                data={"timer": rule["id"]},
+            )
+            d.add(message)
+            d.flush()
+            flows.apply(d, workspace, message, workspace.workflow, actions)
+        elif default_launch and item.destination == "new":
             # Allocate the final research thread before routing its timer. New
             # research launches each get their own relay/count partition.
             with d.begin_nested():
@@ -236,11 +262,16 @@ def run_legacy(settings, d, item, at, *, manual=False):
                 record.research_id = project_id
         record.status = (
             "succeeded"
-            if actions and not all(a["action"] == "wait_for_owner" for a in actions)
+            if actions
+            and any(a["action"] not in {"wait_for_owner", "skip"} for a in actions)
             else "failed"
         )
         if record.status == "failed":
-            record.error = "等你 / Waiting for you"
+            record.error = (
+                "成员暂停中 / Member paused"
+                if any(a["action"] == "skip" for a in actions)
+                else "等你 / Waiting for you"
+            )
     except Exception as exc:  # noqa: BLE001 — persist failed delivery receipts
         record.status, record.error = "failed", str(exc)[:2000] or type(exc).__name__
     record.finished_at = now()
@@ -259,6 +290,9 @@ def tick(settings, maker, at=None):
 
             workspace = d.get(ResearchWorkspace, identifier)
             ensure(d, workspace)
+            from .team_reminders import deliver_due
+
+            deliver_due(d, workspace, at)
             adopt(d, workspace)
             from .research_schedules import stamp
 

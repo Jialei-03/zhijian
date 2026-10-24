@@ -31,10 +31,33 @@
   display: none;
 }
 
-/* In: it fades and settles up var(--ui-space-4). Out: nothing, it is gone at once. */
+/* Animate the menu surface, so placement still measures the full-sized layer. */
+:where(.floating):has(> [role="menu"]) {
+  transition: none;
+}
+
+:where(.floating) > [role="menu"] {
+  transform-origin: top center;
+  animation: menu-in 370ms var(--ui-ease-snappy);
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+/* Other layers, including tooltips, keep their existing fade and move. */
 @starting-style {
-  :where(.floating) {
+  :where(.floating:not(:has(> [role="menu"]))) {
     opacity: 0;
     transform: translateY(var(--ui-space-4));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(.floating) > [role="menu"] {
+    animation: none;
   }
 }

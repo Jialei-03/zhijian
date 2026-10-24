@@ -167,19 +167,27 @@ def test_transport_maps_failures(monkeypatch):
             scholar._get(url)
 
 
-def test_metadata_routes_store_refresh_and_report_failure(env):
+@pytest.mark.parametrize(
+    "venue", ["NeurIPS", "neural information processing systems", "eLife"]
+)
+def test_metadata_routes_store_refresh_and_report_failure(env, venue):
     app, a, b, _ = env
     p = write(a, "/papers", {"title": "Attention Is All You Need", "external_id": "arxiv:1706.03762"}).json()
     seen = []
 
     def lookup(**ids):
         seen.append(ids)
-        return {**scholar._shape(title="T", year=2017, venue="NeurIPS", citation_count=5, reference_count=3, kind="conference", source="Semantic Scholar")}
+        return {**scholar._shape(title="T", year=2017, venue=venue, citation_count=5, reference_count=3, kind="conference", source="Semantic Scholar")}
 
     app.state.scholar_lookup = lookup
     assert a.get(f"/api/v1/papers/{p['id']}/metadata").json()["status"] == "none"
     row = a.post(f"/api/v1/papers/{p['id']}/metadata/refresh", headers={"Idempotency-Key": "k"}).json()
-    assert (row["status"], row["venue"], row["citation_count"]) == ("ok", "NeurIPS", 5)
+    assert (row["status"], row["venue"], row["citation_count"]) == ("ok", venue, 5)
+    with app.state.maker() as d:
+        stored = d.scalar(
+            select(PaperMetadata).where(PaperMetadata.paper_id == p["id"])
+        )
+        assert stored.data["venue"] == venue
     assert seen == [{"doi": "", "arxiv": "1706.03762", "title": ""}]
     assert a.get("/api/v1/paper-metadata").json()[p["id"]]["year"] == 2017
     assert b.get("/api/v1/paper-metadata").json() == {}
@@ -192,7 +200,7 @@ def test_metadata_routes_store_refresh_and_report_failure(env):
     app.state.scholar_lookup = down
     failed = a.post(f"/api/v1/papers/{p['id']}/metadata/refresh")
     assert failed.status_code == 503
-    assert a.get(f"/api/v1/papers/{p['id']}/metadata").json()["venue"] == "NeurIPS"
+    assert a.get(f"/api/v1/papers/{p['id']}/metadata").json()["venue"] == venue
 
     app.state.scholar_lookup = lambda **ids: None
     assert a.post(f"/api/v1/papers/{p['id']}/metadata/refresh").json()["status"] == "missing"

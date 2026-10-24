@@ -444,7 +444,7 @@ def artifact_output(d, row):
         from .models import PaperPreparation
 
         parent = d.get(PaperPreparation, row.parameters["preparation_id"])
-        if row.status != "completed" and parent:
+        if row.status not in {"completed", "failed"} and parent:
             value["status"] = (
                 parent.status
                 if parent.status in {"queued", "running"}
@@ -455,7 +455,7 @@ def artifact_output(d, row):
             value["error"] = (
                 "自动准备已暂停，可在准备状态中继续"
                 if parent.status == "paused"
-                else parent.error
+                else row.error
             )
         return value
     run = d.get(AgentRun, row.run_id) if row.run_id else None

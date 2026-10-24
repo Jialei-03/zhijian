@@ -39,6 +39,87 @@ describe("paperSource", () => {
     ).toBe("DOI");
     expect(paperSource({ external_id: "" } as Paper)).toBe("");
   });
+
+  it.each([
+    ["neural information processing systems", "NeurIPS"],
+    ["Advances in Neural Information Processing Systems", "NeurIPS"],
+    ["nips", "NeurIPS"],
+    ["International Conference on Machine Learning", "ICML"],
+    ["international conference on learning representations", "ICLR"],
+    ["annual meeting of the association for computational linguistics", "ACL"],
+    ["conference on empirical methods in natural language processing", "EMNLP"],
+    [
+      "North American Chapter of the Association for Computational Linguistics",
+      "NAACL",
+    ],
+    ["AAAI Conference on Artificial Intelligence", "AAAI"],
+    ["IEEE/CVF Conference on Computer Vision and Pattern Recognition", "CVPR"],
+    ["IEEE International Conference on Computer Vision", "ICCV"],
+    ["European Conference on Computer Vision", "ECCV"],
+    [
+      "ACM SIGKDD International Conference on Knowledge Discovery and Data Mining",
+      "KDD",
+    ],
+    ["The Web Conference", "WWW"],
+    [
+      "International ACM SIGIR Conference on Research and Development in Information Retrieval",
+      "SIGIR",
+    ],
+    ["CHI Conference on Human Factors in Computing Systems", "CHI"],
+    ["ACM Symposium on User Interface Software and Technology", "UIST"],
+    [
+      "  conference on empirical methods\n in natural language processing  ",
+      "EMNLP",
+    ],
+    ...[
+      "NeurIPS",
+      "ICML",
+      "ICLR",
+      "ACL",
+      "EMNLP",
+      "NAACL",
+      "AAAI",
+      "CVPR",
+      "ICCV",
+      "ECCV",
+      "KDD",
+      "WWW",
+      "SIGIR",
+      "CHI",
+      "UIST",
+    ].map((venue) => [venue.toLowerCase(), venue]),
+  ])("displays %s as %s without changing the record", (venue, label) => {
+    const meta = { paper_id: "p", status: "ok", venue } as const;
+    expect(paperSource(paper, meta)).toBe(label);
+    expect(meta.venue).toBe(venue);
+  });
+
+  it.each([
+    ["eLife", "eLife"],
+    [
+      "IEEE Transactions on Pattern Analysis and Machine Intelligence",
+      "IEEE Transactions on Pattern Analysis and Machine Intelligence",
+    ],
+    [
+      "Journal of Machine Learning Research",
+      "Journal of Machine Learning Research",
+    ],
+    [
+      "journal of machine learning research",
+      "Journal Of Machine Learning Research",
+    ],
+    ["études scientifiques", "Études Scientifiques"],
+    ["计算机学报", "计算机学报"],
+    [
+      "international conference on machine learning workshops",
+      "International Conference On Machine Learning Workshops",
+    ],
+    ["   ", "arXiv"],
+  ])("keeps source case or title-cases unknown venue %s", (venue, label) => {
+    expect(paperSource(paper, { paper_id: "p", status: "ok", venue })).toBe(
+      label,
+    );
+  });
 });
 
 describe("authorList / progressOf", () => {

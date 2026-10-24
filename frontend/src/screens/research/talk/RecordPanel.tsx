@@ -1,21 +1,19 @@
-import { Plus } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Plus, X } from "lucide-react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useI18n } from "../../../i18n/I18nProvider";
 import type { MessageKey } from "../../../i18n/i18n";
-import { Button, Dialog, IconButton } from "../../../ui";
+import { Dialog, IconButton, SegmentedControl } from "../../../ui";
 import { followLink } from "../../../reader/route";
 import {
   jobSeries,
-  readChanges,
-  type CheckpointChanges,
   type Compute,
   type ProjectDetail,
   type ResearchJob,
   type SeriesPoint,
 } from "../research-api";
 import { useResearchNavigation, ResearchState } from "../ResearchNavigation";
-import { ChangeNumbers, DiffDialog } from "../ChangeCards";
-import { MergeDialog } from "../ResearchChanges";
+import { ReviewChanges, type ReviewTarget } from "../ReviewChanges";
+import type { useChanges } from "../use-changes";
 import { WorkflowProgress } from "../../workflows/WorkflowProgress";
 import { FileView } from "../files/FileView";
 import { FilesPanel } from "../files/FilesPanel";
@@ -23,6 +21,8 @@ import { settledKey } from "../files/files-api";
 import { plainCommand } from "../process/model";
 import { RunCard, trackerLink, type ThreadActions } from "./ThreadView";
 import styles from "./Talk.module.css";
+
+export type RecordTab = "progress" | "changes" | "experiments";
 
 export function RecordPanel({
   detail,
@@ -33,6 +33,13 @@ export function RecordPanel({
   onRun,
   actions,
   go,
+  tab,
+  onTab,
+  onClose,
+  width,
+  changes,
+  review,
+  refreshKey,
 }: {
   detail: ProjectDetail;
   outputFile: string;
@@ -42,181 +49,192 @@ export function RecordPanel({
   onRun(id: string): void;
   actions: ThreadActions;
   go(hash: string): void;
+  tab: RecordTab;
+  onTab(tab: RecordTab): void;
+  onClose(): void;
+  width: number;
+  changes: ReturnType<typeof useChanges>;
+  review: ReviewTarget;
+  refreshKey: string;
 }) {
   const { t } = useI18n();
   const { data } = useResearchNavigation();
-  const [changes, setChanges] = useState<CheckpointChanges | null>(null);
-  const [diff, setDiff] = useState(false);
-  const [merging, setMerging] = useState(false);
   const [sources, setSources] = useState(false);
   const p = detail.project;
-  useEffect(() => {
-    let cancelled = false;
-    readChanges(p.id).then(
-      (value) => {
-        if (!cancelled) setChanges(value);
-      },
-      () => {
-        if (!cancelled) setChanges(null);
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [p.id, p.updated_at]);
   const children = data.workspaces
     .flatMap((w) => w.researches)
     .filter((r) => r.parent_id === p.id && !r.archived_at);
   const nodes = detail.nodes.filter((n) => n.parent_id);
   const selected = detail.jobs.find((j) => j.id === run);
+  const panelId = (value: RecordTab) => `research-record-${p.id}-${value}`;
   return (
-    <aside className={styles.record} aria-label={t("research.record.title")}>
-      <div className={styles.recordTitleRow}>
-        <h2>
-          {data.workspaces.find((w) => w.id === p.workspace_id)?.name ||
-            p.title}
-        </h2>
-      </div>
-      {outputFile ? (
-        <FileView
-          projectId={p.id}
-          path={outputFile}
-          settled={p.updated_at}
-          onBack={() => onOutputFile("")}
-          actions={null}
+    <aside
+      className={styles.record}
+      style={{ "--panel-width": `${width}px` } as CSSProperties}
+      aria-label={t("research.record.title")}
+    >
+      <header className={styles.recordHead}>
+        <SegmentedControl
+          kind="tabs"
+          size="sm"
+          label={t("research.record.title")}
+          value={tab}
+          onChange={(value) => {
+            onOutputFile("");
+            onTab(value);
+          }}
+          options={[
+            {
+              value: "progress",
+              label: t("research.record.progress"),
+              panelId: panelId("progress"),
+            },
+            {
+              value: "changes",
+              label: t("research.panel.changes"),
+              panelId: panelId("changes"),
+            },
+            {
+              value: "experiments",
+              label: t("research.record.runs"),
+              panelId: panelId("experiments"),
+            },
+          ]}
         />
-      ) : (
-        <div className={styles.recordBody}>
-          {p.workflow && (
-            <section className={styles.section}>
-              <h3 className={styles.sectionTitle}>{t("workflows.title")}</h3>
-              <WorkflowProgress workflow={p.workflow} />
-            </section>
-          )}
-          {(!!changes?.files.length || !!p.conclusion_record?.summary) && (
-            <section className={styles.section}>
-              <h3 className={styles.sectionTitle}>
-                {t("research.panel.changes")}
-                {!!changes?.files.length && <ChangeNumbers changes={changes} />}
-              </h3>
-              {!changes?.files.length && p.conclusion_record?.summary && (
+        <IconButton
+          icon={X}
+          size="sm"
+          className={styles.recordClose}
+          label={t("common.close")}
+          onClick={onClose}
+        />
+      </header>
+      <div
+        className={styles.recordPane}
+        role="tabpanel"
+        id={panelId(tab)}
+        aria-labelledby={`${panelId(tab)}-tab`}
+      >
+        {outputFile ? (
+          <FileView
+            projectId={p.id}
+            path={outputFile}
+            settled={p.updated_at}
+            onBack={() => onOutputFile("")}
+            actions={null}
+          />
+        ) : tab === "changes" ? (
+          <ReviewChanges
+            detail={detail}
+            total={changes}
+            target={review}
+            refreshKey={refreshKey}
+            onReview={(sprintId) => actions.review?.(sprintId)}
+            onOpen={onOutputFile}
+            onChanged={() => actions.changed?.()}
+          />
+        ) : tab === "experiments" ? (
+          <div className={`${styles.recordBody} ${styles.experiments}`}>
+            {detail.jobs.map((job) => (
+              <RunCard
+                compact
+                key={job.id}
+                job={job}
+                computes={computes}
+                actions={actions}
+              />
+            ))}
+            {!detail.jobs.length && (
+              <p className={styles.empty}>{t("research.record.noRuns")}</p>
+            )}
+          </div>
+        ) : (
+          <div className={styles.recordBody}>
+            {p.workflow && (
+              <section className={styles.section}>
+                <h3 className={styles.sectionTitle}>{t("workflows.title")}</h3>
+                <WorkflowProgress workflow={p.workflow} />
+              </section>
+            )}
+            {(!!p.plan?.hypotheses?.length || !!nodes.length) && (
+              <section className={styles.section}>
+                <h3 className={styles.sectionTitle}>
+                  {t("research.record.plan")}
+                </h3>
+                {nodes.length
+                  ? nodes.map((node) => (
+                      <div key={node.id} className={styles.nodeRow}>
+                        <span>{node.title}</span>
+                        <small>
+                          {t(`research.node.${node.status}` as MessageKey)}
+                        </small>
+                      </div>
+                    ))
+                  : p.plan.hypotheses.map((h) => (
+                      <div key={h.title} className={styles.nodeRow}>
+                        {h.title}
+                      </div>
+                    ))}
+              </section>
+            )}
+            {p.conclusion_record?.summary && (
+              <section className={styles.section}>
+                <h3 className={styles.sectionTitle}>
+                  {t("research.ask.conclusion")}
+                </h3>
                 <p>{p.conclusion_record.summary}</p>
-              )}
-              <div className={styles.tags}>
-                {!!changes?.files.length && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setDiff(true)}
+              </section>
+            )}
+            {!!children.length && (
+              <section className={styles.section}>
+                <h3 className={styles.sectionTitle}>
+                  {t("research.panel.children")}
+                  <span>
+                    {t("research.panel.completed", {
+                      n: children.filter((r) => r.status === "finished").length,
+                    })}
+                  </span>
+                </h3>
+                {children.map((r) => (
+                  <a
+                    key={r.id}
+                    className={styles.childResearch}
+                    href={`#research/${r.id}`}
+                    onClick={followLink(go, `research/${r.id}`)}
                   >
-                    {t("research.changes.compare")}
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setMerging(true)}
-                >
-                  {t("research.merge.action")}
-                </Button>
-              </div>
-            </section>
-          )}
-          {!!children.length && (
-            <section className={styles.section}>
-              <h3 className={styles.sectionTitle}>
-                {t("research.panel.children")}
-                <span>
-                  {t("research.panel.completed", {
-                    n: children.filter((r) => r.status === "finished").length,
-                  })}
-                </span>
-              </h3>
-              {children.map((r) => (
-                <a
-                  key={r.id}
-                  className={styles.childResearch}
-                  href={`#research/${r.id}`}
-                  onClick={followLink(go, `research/${r.id}`)}
-                >
-                  <span>{r.title || r.question}</span>
-                  <ResearchState research={r} />
-                </a>
-              ))}
-            </section>
-          )}
-          {!!detail.jobs.length && (
-            <section className={styles.section}>
-              <h3 className={styles.sectionTitle}>
-                {t("research.record.runs")}
-              </h3>
-              {detail.jobs.slice(0, 10).map((job) => (
-                <RunCard
-                  key={job.id}
-                  job={job}
-                  computes={computes}
-                  actions={actions}
-                />
-              ))}
-            </section>
-          )}
-          {(!!p.plan?.hypotheses?.length || !!nodes.length) && (
-            <section className={styles.section}>
-              <h3 className={styles.sectionTitle}>
-                {t("research.record.plan")}
-              </h3>
-              {nodes.length
-                ? nodes.map((node) => (
-                    <div key={node.id} className={styles.nodeRow}>
-                      <span>{node.title}</span>
-                      <small>
-                        {t(`research.node.${node.status}` as MessageKey)}
-                      </small>
-                    </div>
-                  ))
-                : p.plan.hypotheses.map((h) => (
-                    <div key={h.title} className={styles.nodeRow}>
-                      {h.title}
-                    </div>
-                  ))}
-            </section>
-          )}
-          {!!detail.datasets.length && (
-            <section className={styles.section}>
-              <h3 className={styles.sectionTitle}>
-                {t("research.panel.sources")}
-                <IconButton
-                  icon={Plus}
-                  label={t("research.attach")}
-                  size="sm"
-                  onClick={() => setSources(true)}
-                />
-              </h3>
-              {detail.datasets.map((source) => (
-                <div key={source.id} className={styles.nodeRow}>
-                  <span>{source.name}</span>
-                  <small>
-                    {t(`research.data.${source.status}` as MessageKey)}
-                  </small>
-                  {source.files.map((file) => (
-                    <small key={file.name}>{file.name}</small>
-                  ))}
-                </div>
-              ))}
-            </section>
-          )}
-        </div>
-      )}
-      {diff && changes && (
-        <DiffDialog changes={changes} onClose={() => setDiff(false)} />
-      )}{" "}
-      {merging && (
-        <MergeDialog
-          project={p}
-          onClose={() => setMerging(false)}
-          onChanged={() => actions.changed?.()}
-        />
-      )}
+                    <span>{r.title || r.question}</span>
+                    <ResearchState research={r} />
+                  </a>
+                ))}
+              </section>
+            )}
+            {!!detail.datasets.length && (
+              <section className={styles.section}>
+                <h3 className={styles.sectionTitle}>
+                  {t("research.panel.sources")}
+                  <IconButton
+                    icon={Plus}
+                    label={t("research.attach")}
+                    size="sm"
+                    onClick={() => setSources(true)}
+                  />
+                </h3>
+                {detail.datasets.map((source) => (
+                  <div key={source.id} className={styles.nodeRow}>
+                    <span>{source.name}</span>
+                    <small>
+                      {t(`research.data.${source.status}` as MessageKey)}
+                    </small>
+                    {source.files.map((file) => (
+                      <small key={file.name}>{file.name}</small>
+                    ))}
+                  </div>
+                ))}
+              </section>
+            )}
+          </div>
+        )}
+      </div>
       <Dialog
         open={sources}
         title={t("research.panel.sources")}

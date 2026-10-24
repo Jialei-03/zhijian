@@ -674,7 +674,7 @@ def workflow_context(project):
             "instructions": spec["instructions"],
             "outputs": spec["outputs"],
             "round": item["rounds"] + 1,
-            "max_rounds": spec["max_rounds"],
+            "max_rounds": spec.get("max_rounds"),
             "previous_summary": previous.get("summary", ""),
             "previous_outputs": previous.get("outputs", []),
             "revision_notes": item.get("review_notes", ""),

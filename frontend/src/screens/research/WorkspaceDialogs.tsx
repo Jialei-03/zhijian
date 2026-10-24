@@ -14,6 +14,7 @@ import {
   Dialog,
   Floating,
   IconButton,
+  SegmentedControl,
   Spinner,
   TextField,
 } from "../../ui";
@@ -40,7 +41,9 @@ export function WorkspacePicker({
   onChange,
   prominent = false,
   label,
+  "data-id": dataId,
 }: {
+  "data-id"?: string;
   value: string;
   onChange(id: string): void;
   prominent?: boolean;
@@ -86,6 +89,7 @@ export function WorkspacePicker({
       {prominent ? (
         <Button
           ref={anchor}
+          data-id={dataId}
           variant="primary"
           icon={Folder}
           aria-label={t("workspace.chooseFolder")}
@@ -99,15 +103,16 @@ export function WorkspacePicker({
         <button
           type="button"
           ref={anchor}
+          data-id={dataId}
           className={styles.chip}
           aria-label={label || t("workspace.choose")}
           aria-expanded={open}
           aria-haspopup="dialog"
           onClick={toggle}
         >
-          <Folder size={15} aria-hidden />
+          <Folder size={16} aria-hidden />
           <span>{current?.name || t("workspace.choose")}</span>
-          <ChevronDown size={12} aria-hidden />
+          <ChevronDown size={16} aria-hidden />
         </button>
       )}
       <Floating
@@ -181,7 +186,7 @@ export function WorkspacePicker({
                     close();
                   }}
                 >
-                  <Folder size={15} aria-hidden />
+                  <Folder size={16} aria-hidden />
                   <span>
                     {workspace.name}
                     <small title={machine(workspace.location).title}>
@@ -231,11 +236,15 @@ export function CreateWorkspaceDialog({
   onCreated(workspace: NavigationWorkspace): void;
 }) {
   const { t } = useI18n();
-  const [name, setName] = useState("");
+  const [name, setName] = useState(() => t("workspace.untitled"));
+  const nameField = useRef<HTMLInputElement>(null);
+  const [mode, setMode] = useState<"new" | "existing">("new");
   const [kind, setKind] = useState<"local" | "ssh">("local");
   const [connectionId, setConnectionId] = useState("");
   const [connections, setConnections] = useState<SSHConnection[]>([]);
   const [path, setPath] = useState("");
+  const [folderError, setFolderError] =
+    useState<FolderListing["project_error"]>("");
   const [managing, setManaging] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -244,10 +253,38 @@ export function CreateWorkspaceDialog({
       setError(message(reason)),
     );
   }, []);
+  useEffect(() => {
+    nameField.current?.select();
+  }, []);
+  useEffect(() => {
+    if (mode !== "new" || (kind === "ssh" && !connectionId)) return;
+    let stale = false;
+    browseFolders(kind, "", connectionId).then(
+      (listing) => {
+        if (!stale) setPath(listing.path);
+      },
+      (reason: unknown) => {
+        if (!stale) setError(message(reason));
+      },
+    );
+    return () => {
+      stale = true;
+    };
+  }, [kind, connectionId, mode]);
   const currentConnection = connections.find(
     (connection) => connection.id === connectionId,
   );
-  const folderName = path.split(/[\\/]/).filter(Boolean).at(-1) || "";
+  const invalidName =
+    mode === "new" &&
+    ([".", ".."].includes(name.trim()) || /[/\\\0\n\r]/.test(name.trim()));
+  const canCreate =
+    !!path &&
+    !!name.trim() &&
+    !invalidName &&
+    (mode === "new" || !folderError) &&
+    (kind !== "ssh" || !!connectionId);
+  const targetPath =
+    mode === "new" ? `${path.replace(/\/$/, "")}/${name.trim()}` : path;
   const machineName =
     kind === "local"
       ? t("workspace.local")
@@ -256,20 +293,22 @@ export function CreateWorkspaceDialog({
     setKind(next);
     setConnectionId(id);
     setPath("");
+    setFolderError("");
     setError("");
   };
   const create = async () => {
-    if (!path || (kind === "ssh" && !connectionId)) return;
+    if (!canCreate || busy) return;
     setBusy(true);
     setError("");
     try {
       const workspace = await createPhysicalWorkspace(
-        name.trim() || folderName || machineName,
+        name.trim(),
         {
           kind,
           path,
           connection_id: kind === "ssh" ? connectionId : "",
         },
+        mode === "new",
       );
       refreshResearchNavigation();
       onCreated(workspace);
@@ -286,6 +325,7 @@ export function CreateWorkspaceDialog({
       onClose={onClose}
       dismissible={!busy}
       size="md"
+      initialFocus={nameField}
       footer={
         <>
           <Button variant="ghost" disabled={busy} onClick={onClose}>
@@ -294,15 +334,43 @@ export function CreateWorkspaceDialog({
           <Button
             variant="primary"
             loading={busy}
-            disabled={!path || (kind === "ssh" && !connectionId)}
+            disabled={!canCreate}
             onClick={create}
           >
-            {t("workspace.useSelectedFolder")}
+            {t(
+              mode === "new" ? "workspace.add" : "workspace.useSelectedFolder",
+            )}
           </Button>
         </>
       }
     >
       <div className={styles.stack}>
+        <fieldset className={styles.machineChooser} disabled={busy}>
+          <SegmentedControl
+            kind="radio"
+            label={t("workspace.folderHeading")}
+            value={mode}
+            onChange={(next) => {
+              if (busy) return;
+              setMode(next);
+              setPath("");
+              setFolderError("");
+              setError("");
+            }}
+            options={[
+              { value: "new", label: t("workspace.newFolder") },
+              { value: "existing", label: t("workspace.existingFolder") },
+            ]}
+          />
+        </fieldset>
+        <TextField
+          ref={nameField}
+          label={t("workspace.name")}
+          value={name}
+          required
+          disabled={busy}
+          onChange={(event) => setName(event.target.value)}
+        />
         <fieldset className={styles.machineChooser} disabled={busy}>
           <legend>{t("workspace.machineHeading")}</legend>
           <div className={styles.machineChoices}>
@@ -348,16 +416,21 @@ export function CreateWorkspaceDialog({
             {t("workspace.addMachine")}
           </Button>
         </fieldset>
-        <div className={styles.folderStep}>
-          <h3>{t("workspace.folderHeading")}</h3>
-          <FolderBrowser
-            key={`${kind}:${connectionId}`}
-            kind={kind}
-            connectionId={connectionId}
-            disabled={busy}
-            onPath={setPath}
-          />
-        </div>
+        {mode === "existing" && (
+          <div className={styles.folderStep}>
+            <h3>{t("workspace.folderHeading")}</h3>
+            <FolderBrowser
+              key={`${kind}:${connectionId}`}
+              kind={kind}
+              connectionId={connectionId}
+              disabled={busy}
+              onFolder={(listing) => {
+                setPath(listing?.path || "");
+                setFolderError(listing?.project_error || "");
+              }}
+            />
+          </div>
+        )}
         {path && (
           <section
             className={styles.folderSelection}
@@ -366,17 +439,20 @@ export function CreateWorkspaceDialog({
             <Check size={16} aria-hidden />
             <span>
               <strong>{machineName}</strong>
-              <code>{path}</code>
+              <code>{targetPath}</code>
             </span>
           </section>
         )}
-        <TextField
-          label={t("workspace.nameOptional")}
-          value={name}
-          placeholder={folderName}
-          disabled={busy}
-          onChange={(event) => setName(event.target.value)}
-        />
+        {mode === "existing" && folderError && (
+          <p role="status" className={styles.error}>
+            {t(`workspace.folderError.${folderError}`)}
+          </p>
+        )}
+        {invalidName && (
+          <p role="status" className={styles.error}>
+            {t("workspace.invalidFolderName")}
+          </p>
+        )}
         {error && (
           <p role="alert" className={styles.error}>
             {error}
@@ -404,12 +480,12 @@ function FolderBrowser({
   kind,
   connectionId,
   disabled,
-  onPath,
+  onFolder,
 }: {
   kind: "local" | "ssh";
   connectionId: string;
   disabled: boolean;
-  onPath(path: string): void;
+  onFolder(listing: FolderListing | null): void;
 }) {
   const { t } = useI18n();
   const [listing, setListing] = useState<FolderListing | null>(null);
@@ -417,20 +493,20 @@ function FolderBrowser({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [showHidden, setShowHidden] = useState(false);
-  const latest = useRef(onPath);
-  latest.current = onPath;
+  const latest = useRef(onFolder);
+  latest.current = onFolder;
   const request = useRef(0);
   const read = async (path: string) => {
     const id = ++request.current;
     setBusy(true);
     setError("");
-    latest.current("");
+    latest.current(null);
     try {
       const result = await browseFolders(kind, path, connectionId);
       if (id === request.current) {
         setListing(result);
         setAddress(result.path);
-        latest.current(result.path);
+        latest.current(result);
       }
     } catch (reason) {
       if (id === request.current) {
@@ -472,7 +548,9 @@ function FolderBrowser({
           disabled={disabled}
           onChange={(event) => {
             setAddress(event.target.value);
-            latest.current("");
+            request.current++;
+            setBusy(false);
+            latest.current(null);
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter") {

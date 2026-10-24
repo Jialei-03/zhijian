@@ -23,20 +23,20 @@ Open Research Agent goes after exactly these: **research judgment**, **staying o
 
 ## How it works
 
-<p align="center"><img src="docs/images/plan.png" alt="A research plan agreed with the advisor" width="900"></p>
+<p align="center"><img src="docs/images/home.en.png" alt="New research: start from one sentence" width="900"></p>
 
 - **It starts with one sentence**: in New research, say what you want to find out and pick a project, a workflow and a model. The advisor talks it through and writes a plan card: the metric, the baseline, what comes first, and what result would sink each hypothesis. Experiments start when you press Start experiments.
-- **Used like Codex**: projects and their conversations on the left, with status (working, waiting for you, done); each round of a conversation folds into "took X", followed by what it said and its cards (plan, experiments, file changes, conclusion); the side panel lists changes, sub-researches, experiments, the plan and sources. No explanatory clutter.
+- **Work together like in Feishu**: channels and member DMs share one conversation list, newest first, with previews, unread counts and who is working. Your messages sit on the right; member replies are cards with their work folded into one line, files to open, and changed files to diff or revert. Each research runs in a thread.
 - **Research map**: the direction lives in a persistent tree, not in chat history: north-star question → sub-questions → hypotheses → experiments → findings. Each round starts from the map and the last handoff. The executor must name the node it advances before acting; drift is refused and logged.
 - **The advisor judges, you decide**: a read-only advisor reviews the map, checks numbers against the logs, decides to continue, invest, drop or pivot, and asks you about choices it cannot make. The plan, the conclusion and any extra budget are your call.
-- **Every project is a git repository, every research a branch**: a research writes its code and results in its own worktree, with a checkpoint commit at the end of every round. Fork a new research from any round to try another way; conclusions merge back into the project's memory, code into the main line once you confirm. The desktop app carries its own git.
-- **Workflows**: built-in Research, Literature review, Reproduce a paper, Write a paper and From reading to writing, or your own steps; managed under Customize.
+- **Projects are git repositories; research runs in threads**: a research writes its code and results in its own worktree, with a checkpoint commit at the end of every round. Fork a new research from a round with a saved checkpoint to try another way; conclusions merge back into the project's memory, code into the main line once you confirm. The desktop app carries its own git.
+- **Workflows**: organize collaboration with rules ("when…, who does what"), edited as a list or connected on a canvas. Built-in workflows include Research, Literature review, Reproduce a paper, Write a paper and From reading to writing, managed in team settings or Customize. Rerun from a round's checkpoint with another workflow, then use Compare to view conclusions, metrics, tokens, experiment time, elapsed time and member participation side by side.
 - **Scheduled tasks**: start a conversation or say something in one on a schedule: a daily paper digest, a weekly research report, extra seeds overnight.
 - **Experiments on your machines**: on this computer (Apple MPS or NVIDIA GPUs), or on any SSH host from `~/.ssh/config` once switched on; the system checks it can reach it and what GPUs and Python it has. Nothing to prepare ahead: experiments install what they lack in a virtual environment in their workspace, and on multi-GPU hosts the executor picks idle GPUs each time.
 - **Evidence**: logs, hyperparameters and metrics are collected by the system. A conclusion may only cite real log lines or paper sentences, and numbers must match exactly. Runs can be mirrored to SwanLab or Weights & Biases.
 - **Research playbook (cross-project self-improvement)**: after each research, a distiller writes "in this situation, do this" rules, which take effect once two researches support them. Not yet shown to help (see Status).
 
-<p align="center"><img src="docs/images/panel.png" alt="A conversation and its side panel: changes and experiments" width="900"></p>
+<p align="center"><img src="docs/images/research.en.png" alt="A research thread: plan, experiments and results" width="900"></p>
 
 **An example**: asked "On MNIST, with the same small CNN, which reaches higher test accuracy in 3 epochs, AdamW or SGD with momentum?", it spent 2.5 hours, 13 rounds and 14 experiments on an M5 Pro and concluded: with each learning rate tuned, AdamW is 0.16–0.46 points higher, about the size of seed noise, and the two tie once BatchNorm and light augmentation are added. Along the way it found SGD at a high learning rate collapses on MPS but not on the CPU, moved the main comparison to the CPU, and wrote down where the result holds.
 
@@ -44,19 +44,28 @@ Open Research Agent goes after exactly these: **research judgment**, **staying o
 
 Details: [Research](docs/RESEARCH.md).
 
-## In progress: a research team
+## Research team
 
-Next, ORA becomes a research team: you lead, and the team is agents you define (advisor, executor, librarian, reviewer, writer…). You talk with them as in Slack, in channels, direct messages and threads; `@` wakes whoever you name, and agents `@` each other to hand work on; a message to a busy agent can wait in a queue or interrupt at once. A workflow is the team's rules ("when…, who does what"), edited as a list or wired on a canvas, and the same question can be run again with another way of working, side by side. Design: [Research team](docs/design/agent-team.md).
+<p align="center"><img src="docs/images/team.en.png" alt="Team conversation: member reply cards, files and changes" width="900"></p>
+
+You lead a team of agents you define. Built-in members include an advisor, executor, librarian, reviewer, writer and distiller, which you can adapt for each project.
+
+- **Members are files**: definitions live in the project repository at `.ora/agents/<name>.md`, with YAML frontmatter and a Markdown body, the same format as Claude Code custom subagents. Edit them in the UI or any editor and keep them with the repository. Import Claude Code's `.claude/agents/*.md` or Codex role `.toml` files. The repository's root `AGENTS.md` holds instructions shared by every member.
+- **Wake whoever you name**: `@` a member in your message to wake them; name several to wake them together. Agents hand off work through the `to` field of the `team_send_message` tool; `@` in an agent's text only refers to someone and does not wake them. Messages to a busy member can queue or be sent immediately. Edit, withdraw or send queued messages immediately, and stop a working member from its message.
+- **Unlimited by default**: members have no default limits on rounds, time or tokens, and agent handoffs have no cap. Set a member's `budget` in its file or enable team token and concurrency guardrails in team settings when needed; all are unlimited by default. Tools provide capabilities; you and your workflows decide how the team works.
+
+Design: [Research team](docs/design/agent-team.md), [Member files](docs/design/agent-files.md) and the [design index](docs/design/README.md).
 
 ## Status
 
 An early version. What really works today:
 
 - **The whole research loop**: conversational planning, local and SSH environments, the advisor, evidence checks, the playbook, reports, project repositories and branches, workflows, scheduled tasks. The MNIST example above ran end to end with a real model (MiniMax).
+- **Research teams**: channels, direct messages and threads, custom member files, queued and immediate messages, stopping members, workflow rule lists, a canvas and a comparison page.
 - **Seven rounds of evaluation** on sealed tasks covering four kinds of research judgment (find the best threshold; report missing data and stop; drop a tempting dead end; suspect a near-perfect score and find the leaking column). The latest round ended correctly in 17 of 18 runs; on a pre-registered set of new tasks, all 15 runs without the playbook ended correctly. See the [evaluation record](docs/research/2026-10-20-third-results.md).
 - **The advisor's value is knowing when to stop**: without it, the executor stays honest and its numbers right, but all 6 runs exhaust the budget, costing 1.3 to 2.5 times as much.
 - **The playbook is not yet shown to help**: rules learned from an empty playbook cut cost by 27% on tasks used during development but did **not** carry over to a pre-registered fresh set. See the [ablation](docs/research/2026-10-20-learned-playbook.md) and the [fresh held-out set](docs/research/2026-10-20-fresh-heldout-plan.md).
-- **Not yet**: the research team (in progress), research on the hosted site (it runs on your computer only).
+- **Not yet**: research on the hosted site (it runs on your computer only).
 
 ## Reading papers
 
@@ -68,7 +77,7 @@ The other half of the agent is reading papers. That part also works on its own, 
 - Parallel translation, layout translation and LaTeX recompilation.
 - Markdown notes, materials (all / reading / unread / read), related papers and recommendations.
 
-<p align="center"><img src="docs/images/library.png" alt="Materials" width="900"></p>
+<p align="center"><img src="docs/images/reader.en.png" alt="The reader and its assistant" width="900"></p>
 
 ## Run it on your computer
 

@@ -1,5 +1,5 @@
 import { Members } from "./Members";
-import { memberName } from "./member-model";
+import { memberAvatarSeed, memberName } from "./member-model";
 import { defaultChannelNames } from "../research/team-model";
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../../i18n/I18nProvider";
@@ -29,6 +29,9 @@ export const workflowMembers = (
   team.members.map((m) => ({
     id: m.id,
     name: memberName(m, name),
+    avatar: m.avatar,
+    avatar_url: m.avatar_url,
+    avatar_seed: memberAvatarSeed(m),
     ...(m.enabled !== undefined
       ? { enabled: m.enabled && !m.deleted, subscriptions: m.subscriptions }
       : {}),

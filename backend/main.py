@@ -238,6 +238,12 @@ def create_app(settings=None):
             if request.headers.get("content-type", "").startswith("multipart/form-data")
             else 2 * 1024 * 1024
         )
+        if request.headers.get("x-avatar-upload") == "1" and re.fullmatch(
+            r"/api/v1/research/workspaces/[^/]+/team/members(?:/[^/]+)?",
+            request.url.path,
+        ):
+            # Avatar bytes travel with the member save as base64 JSON.
+            limit = ((settings.upload_limit + 2) // 3) * 4 + 2 * 1024 * 1024
         try:
             length = int(request.headers.get("content-length", "0") or "0")
         except ValueError:
@@ -278,8 +284,9 @@ def create_app(settings=None):
                 else "no-store"
             )
         )
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
         )
         if settings.secure_cookie:
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
@@ -910,6 +917,10 @@ def create_app(settings=None):
             "used_bytes": sum(amounts.values()),
             "limit_bytes": settings.storage_limit,
             "categories": amounts,
+            "logs_path": (
+                str(Path(settings.storage).absolute().parent / "logs")
+                if settings.mode == "local" else None
+            ),
         }
 
     @app.post("/api/v1/papers/{id}/files")
